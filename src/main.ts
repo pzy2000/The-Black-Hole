@@ -130,6 +130,7 @@ const bhUniforms = {
   uSkyTex: { value: skyRt.texture },
   uSkyRot: { value: new THREE.Matrix3() },
   uJet: { value: 1.0 },
+  uJetLen: { value: 30.0 },
   uStream: { value: 1.0 },
 };
 
@@ -667,6 +668,7 @@ function applySystem(sys: StarSystem) {
   bhUniforms.uTempPeak.value = sys.disk.tempPeak;
   bhUniforms.uExposure.value = sys.disk.exposure;
   bhUniforms.uJet.value = sys.jet;
+  bhUniforms.uJetLen.value = sys.jetLen;
   bhUniforms.uStream.value = sys.stream;
   removeCompanion();
   if (sys.companion) spawnCompanion(sys);
@@ -790,7 +792,7 @@ function launchFreeFlight() {
 
 function completeMission() {
   const mission = MISSIONS[missionIndex];
-  saveProgress(missionIndex + 1);
+  saveProgress(Math.max(savedProgress(), missionIndex + 1)); // 进度只前进不回退
   state.paused = true;
   removeDerelict();
   const next = missionIndex + 1;
@@ -891,6 +893,43 @@ function toggleStarMap() {
   hud.toast(starMapOn ? '星图模式 · 开' : '星图模式 · 关', 1400);
 }
 
+// —— EHT 视角：科学渲染参数 + 广角定机位（模拟地球观测几何） ——
+let ehtSaved: { beaming: number; exposure: number; camPos: THREE.Vector3; quat: THREE.Quaternion; camMode: 0 | 1 | 2 } | null = null;
+function toggleEhtView() {
+  if (!ehtSaved) {
+    ehtSaved = {
+      beaming: params.beaming,
+      exposure: bhUniforms.uExposure.value,
+      camPos: camera.position.clone(),
+      quat: ship.quat.clone(),
+      camMode: state.cameraMode,
+    };
+    params.beaming = 1.0; // EHT 照片包含真实聚束
+    bhUniforms.uExposure.value = Math.min(bhUniforms.uExposure.value, 1.6);
+    state.cameraMode = 0;
+    state.autoBrake = false;
+    ship.vel.set(0, 0, 0);
+    // 正对黑洞的远景（等效地球观测几何：黑洞视角直径 ≈ EHT 影像构图）
+    ship.pos.set(80, 8, 0);
+    ship.vel.set(0, 0, 0);
+    lookAlongDir(-80, -8, 0);
+    camera.position.copy(ship.pos).add(new THREE.Vector3(-2.4, 1.2, 0));
+    camera.up.set(0, 1, 0);
+    camera.lookAt(0, 0, 0);
+    hud.toast('EHT 视角 · 已按地球观测几何对准（按 E 退出）', 3600);
+  } else {
+    params.beaming = ehtSaved.beaming;
+    bhUniforms.uExposure.value = ehtSaved.exposure;
+    ship.pos.copy(ehtSaved.camPos);
+    ship.quat.copy(ehtSaved.quat);
+    state.cameraMode = ehtSaved.camMode;
+    ehtSaved = null;
+    hud.toast('EHT 视角 · 已退出', 1600);
+  }
+  btnBeam.classList.toggle('on', params.beaming > 0.6);
+  btnBeam.textContent = params.beaming > 0.6 ? '聚束 · 真实' : '聚束 · 电影';
+}
+
 const ui = new Ui({
   onStartMission: (i) => ui.showBrief(MISSIONS[i].title, MISSIONS[i].brief, () => launchMission(i)),
   onFreeFlight: launchFreeFlight,
@@ -937,6 +976,9 @@ window.addEventListener('keydown', (e) => {
     hud.setVisible(state.hudVisible);
   } else if (e.code === 'KeyM') {
     toggleStarMap();
+  } else if (e.code === 'KeyE') {
+    flags.add('eht');
+    toggleEhtView();
   } else if (e.code === 'KeyT' && missionIndex >= 0) {
     MISSIONS[missionIndex].onKey?.(e.code, ctx);
   }

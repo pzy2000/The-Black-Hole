@@ -34,6 +34,7 @@ uniform float uFlowPeriod;
 uniform sampler2D uSkyTex;
 uniform mat3 uSkyRot;
 uniform float uJet;
+uniform float uJetLen;
 uniform float uStream;
 
 // TDE 碎屑流平面（倾斜于吸积盘）
@@ -220,14 +221,18 @@ void main() {
       }
     }
 
-    // 相对论喷流：沿 ±y 轴的锥形外流，β=0.9，多普勒增亮 + 湍流结节
+    // 相对论喷流：沿 ±y 轴的锥形外流，β=0.9，多普勒增亮 + 湍流结节 + 缓慢进动
     float ay = abs(pos.y);
-    if (uJet > 0.001 && ay > 0.4 && ay < 30.0) {
+    if (uJet > 0.001 && ay > 0.4 && ay < uJetLen) {
+      float pre = sin(uTime * 0.02) * 0.04 * ay; // 进动摆动
+      float dj = length(pos.xz - vec2(pre, 0.0));
       float rj = 0.10 + 0.085 * ay;
-      float dj = length(pos.xz);
+      float fade = 1.0 - smoothstep(uJetLen * 0.35, uJetLen, ay); // 随距离衰减
       if (dj < rj) {
         float kn = vnoise3(vec3(pos.x * 2.2, pos.y * 0.55 - sign(pos.y) * uTime * 1.4, pos.z * 2.2));
-        float dens = pow(1.0 - dj / rj, 0.6) * (0.35 + 0.75 * kn);
+        // 结节（M87 的 HST-1 风格 knot）
+        float knot = 0.7 + 0.6 * pow(max(sin(ay * 0.9 - uTime * 0.15), 0.0), 3.0);
+        float dens = pow(1.0 - dj / rj, 0.6) * (0.35 + 0.75 * kn) * fade * knot;
         vec3 vhat = vec3(0.0, sign(pos.y), 0.0);
         vec3 pd = -normalize(dir);
         float betaJ = 0.9;

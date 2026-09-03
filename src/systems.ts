@@ -10,6 +10,7 @@ export interface StarSystem {
   rsKm: number;
   disk: { inner: number; outer: number; tempPeak: number; exposure: number };
   jet: number;
+  jetLen: number;
   stream: number;
   companion?: {
     name: string;
@@ -36,6 +37,7 @@ export const SYSTEMS: StarSystem[] = [
     rsKm: 1.27e7,
     disk: { inner: 3.0, outer: 13.0, tempPeak: 5200, exposure: 1.8 },
     jet: 1.0,
+    jetLen: 30.0,
     stream: 1.0,
     unlockAfter: 0,
     missionOffset: 0,
@@ -51,6 +53,7 @@ export const SYSTEMS: StarSystem[] = [
     rsKm: 62,
     disk: { inner: 3.0, outer: 12.0, tempPeak: 7000, exposure: 2.6 },
     jet: 1.4,
+    jetLen: 40.0,
     stream: 0,
     companion: {
       name: 'HDE 226868',
@@ -73,6 +76,7 @@ export const SYSTEMS: StarSystem[] = [
     rsKm: 1.92e10,
     disk: { inner: 3.0, outer: 14.0, tempPeak: 4800, exposure: 1.4 },
     jet: 2.2,
+    jetLen: 70.0,
     stream: 0,
     unlockAfter: 11,
     missionOffset: 11,

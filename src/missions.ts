@@ -381,4 +381,93 @@ export const MISSIONS: Mission[] = [
       }
     },
   },
+  {
+    title: '巡礼 · 遇见 M87*',
+    brief: [
+      '最后一跳：5500 万光年，室女座星系团的心脏。',
+      '这个黑洞的质量是太阳的 65 亿倍——它的一根喷流，就能横贯你的整个母星系。',
+      '先做一次远程勘察：确认喷流的进动轴，然后贴着它飞完全程。',
+    ],
+    complete: ['勘察完成。喷流正以 0.9 倍光速外流，规律性结节如时钟般精确。', '2019 年人类给它拍过一张照片——你马上就能站到比那张照片近一万亿倍的地方。'],
+    setup: (ctx) => {
+      ctx.ship.pos.set(50, 6, 30);
+      const tangent = new THREE.Vector3(-ctx.ship.pos.z, 0, ctx.ship.pos.x).normalize();
+      ctx.ship.vel.copy(tangent.multiplyScalar(Math.sqrt(0.5 * ctx.ship.pos.length() / (ctx.ship.pos.length() - 1) ** 2)));
+      ctx.ship.fuel = FUEL_MAX;
+      ctx.ship.heat = 0;
+      ctx.ship.alive = true;
+      ctx.lookAlong(tangent.x, tangent.y, tangent.z);
+    },
+    objectives: [
+      { text: '沿喷流向上游飞至 45 Rs 高度', check: (c) => c.ship.pos.y > 45 },
+      { text: '穿越到下游 45 Rs（-y 方向）', check: (c) => c.ship.pos.y < -45 },
+      { text: '返回盘平面附近（|y| < 8）', check: (c) => Math.abs(c.ship.pos.y) < 8 },
+    ],
+  },
+  {
+    title: '巡礼 · 甜甜圈时刻',
+    brief: [
+      '1918 年，Heber Curtis 在 M87 星系里第一次注意到这根「奇特的直线」。',
+      '2019 年，事件视界望远镜把它的影子拍成了人类的第一张黑洞照片。',
+      '现在，把飞船开到「地球等效视角」，用船载相机复现那一刻。按 E 进入。',
+    ],
+    complete: [
+      '照片已存档。阴影的直径约 420 亿公里，比整个太阳系还大。',
+      'EHT 团队花了十年才洗出这张照片；你只用了一次跳跃。',
+    ],
+    setup: (ctx) => {
+      ctx.ship.pos.set(1500, 90, 0);
+      ctx.ship.vel.set(0, 0, 0);
+      ctx.ship.fuel = FUEL_MAX;
+      ctx.ship.heat = 0;
+      ctx.ship.alive = true;
+      ctx.lookAlong(-1500, -90, 0);
+    },
+    objectives: [
+      { text: '按 E 进入 EHT 视角并拍摄（任意距离）', check: (c) => c.flags.has('eht') },
+      { text: '抵近：回到 200 Rs 以内', check: (c) => c.ship.pos.length() < 200 },
+    ],
+    onKey: (code, ctx) => {
+      if (code === 'KeyE' && !ctx.flags.has('eht')) {
+        ctx.flags.add('eht');
+        ctx.fx.flash();
+        ctx.toast('EHT 视角照片已存档');
+      }
+    },
+  },
+  {
+    title: '巡礼 · 巨兽之眼',
+    brief: [
+      '巡礼的最后一站：贴近 M87* 的光子环。',
+      '65 亿倍太阳质量的时空在这里弯曲得恰到好处，光可以绕它转上一整圈。',
+      '进去，拍下它的正脸，回来。和第一站一样的任务——但这一次，你是替 5500 万年后的地球去的。',
+    ],
+    complete: [
+      '三站巡礼，就此完成。',
+      '从人马座 A* 的金色巨盘，到天鹅座 X-1 的物质之河，再到这里的万丈喷流——',
+      '每一个黑洞都是同一组方程的解，却各有各的性格。地球会为你的数据骄傲很多代。',
+    ],
+    setup: (ctx) => {
+      ctx.ship.pos.set(20, 2, 0);
+      const tangent = new THREE.Vector3(0, 0, 1);
+      ctx.ship.vel.copy(tangent.multiplyScalar(Math.sqrt(0.5 * ctx.ship.pos.length() / (ctx.ship.pos.length() - 1) ** 2)));
+      ctx.ship.fuel = FUEL_MAX;
+      ctx.ship.heat = 0;
+      ctx.ship.alive = true;
+      ctx.lookAlong(tangent.x, tangent.y, tangent.z);
+    },
+    objectives: [
+      { text: '深入至 4 Rs 以内', check: (c) => c.ship.pos.length() < 4 },
+      { text: '拍摄光子环正脸（4 Rs 以内按 T）', check: (c) => c.flags.has('ring') },
+      { text: '返航：撤离至 40 Rs 以外', check: (c) => c.ship.pos.length() > 40 },
+    ],
+    onKey: (code, ctx) => {
+      if (code === 'KeyT' && ctx.ship.pos.length() < 4 && !ctx.flags.has('ring')) {
+        ctx.flags.add('ring');
+        ctx.fx.spawnProbe(ctx.ship.pos);
+        ctx.fx.flash();
+        ctx.toast('光子环影像已存档');
+      }
+    },
+  },
 ];
