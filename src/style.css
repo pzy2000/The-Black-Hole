@@ -109,3 +109,65 @@ footer {
   color: rgba(160, 214, 255, 0.92);
   text-shadow: 0 0 6px rgba(0, 0, 0, 0.95);
 }
+
+/* 星图 */
+.eh-gm-panel {
+  width: min(860px, 92vw);
+  text-align: center;
+  padding: 34px;
+  background: rgba(6, 8, 16, 0.82);
+  border: 1px solid rgba(140, 190, 255, 0.25);
+  border-radius: 6px;
+  backdrop-filter: blur(10px);
+}
+.eh-gm-panel h2 { font-size: 24px; font-weight: 300; letter-spacing: 0.4em; color: #dce8f8; }
+.eh-gm-sub { margin-top: 10px; font-size: 11px; letter-spacing: 0.25em; color: rgba(160, 190, 230, 0.5); }
+.eh-gm-canvaswrap { position: relative; margin-top: 20px; }
+.eh-gm-canvaswrap canvas { width: 100%; height: auto; border-radius: 4px; }
+.eh-gm-marks { position: absolute; inset: 0; pointer-events: none; }
+.eh-gm-mark {
+  position: absolute; transform: translate(-50%, -50%);
+  pointer-events: auto; cursor: pointer;
+  appearance: none; background: rgba(10, 14, 24, 0.85);
+  border: 1px solid rgba(255, 217, 168, 0.45); border-radius: 4px;
+  color: #ffe0b9; font-size: 12px; letter-spacing: 0.12em;
+  padding: 7px 13px; line-height: 1.7; text-align: center;
+  transition: border-color 0.25s;
+}
+.eh-gm-mark:hover { border-color: rgba(255, 217, 168, 0.95); }
+.eh-gm-mark span { font-size: 10px; color: rgba(160, 190, 230, 0.65); }
+.eh-gm-mark em { font-style: normal; font-size: 10px; color: #ffd9a8; letter-spacing: 0.2em; }
+.eh-gm-panel .eh-modal-btns { margin-top: 22px; }
+.eh-gm-panel .eh-modal-btns button {
+  min-width: 160px;
+  appearance: none; background: rgba(20,16,12,0.6); border: 1px solid rgba(255,200,140,0.35);
+  border-radius: 3px; color: rgba(255,224,185,0.9); font-size: 13px; letter-spacing: 0.25em;
+  padding: 9px 24px; cursor: pointer;
+}
+
+/* 图鉴 */
+.eh-dex-panel {
+  width: min(880px, 94vw); max-height: 88vh; overflow: auto;
+  text-align: center; padding: 34px;
+  background: rgba(6, 8, 16, 0.82);
+  border: 1px solid rgba(255, 200, 140, 0.25);
+  border-radius: 6px;
+  backdrop-filter: blur(10px);
+}
+.eh-dex-panel h2 { font-size: 24px; font-weight: 300; letter-spacing: 0.4em; color: #f2e7d5; }
+.eh-dex-cards { margin-top: 24px; display: flex; flex-direction: column; gap: 14px; }
+.eh-dex-card {
+  text-align: left; padding: 18px 22px;
+  background: rgba(14, 16, 24, 0.7);
+  border: 1px solid rgba(255, 200, 140, 0.22); border-radius: 4px;
+}
+.eh-dex-card.locked { opacity: 0.4; }
+.eh-dex-card h3 { font-size: 16px; font-weight: 500; letter-spacing: 0.2em; color: #ffdfae; }
+.eh-dex-card .row { margin-top: 6px; font-size: 12px; letter-spacing: 0.08em; color: rgba(220, 225, 235, 0.75); line-height: 1.9; }
+.eh-dex-card .row b { color: #9fd8ff; font-weight: 500; }
+.eh-dex-panel .eh-modal-btns button {
+  min-width: 160px;
+  appearance: none; background: rgba(20,16,12,0.6); border: 1px solid rgba(255,200,140,0.35);
+  border-radius: 3px; color: rgba(255,224,185,0.9); font-size: 13px; letter-spacing: 0.25em;
+  padding: 9px 24px; cursor: pointer;
+}

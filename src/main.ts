@@ -215,10 +215,29 @@ const btnBeam = document.getElementById('btnBeam') as HTMLButtonElement;
 const btnOrbit = document.getElementById('btnOrbit') as HTMLButtonElement;
 btnOrbit.parentElement?.removeChild(btnOrbit); // 自动巡航被飞船控制取代
 
+function persistSettings() {
+  localStorage.setItem('eh-settings', JSON.stringify({ quality: params.quality, beaming: params.beaming }));
+}
+try {
+  const savedSettings = JSON.parse(localStorage.getItem('eh-settings') ?? '{}');
+  if (savedSettings.quality && QUALITY_ORDER.includes(savedSettings.quality)) {
+    params.quality = savedSettings.quality;
+    btnQuality.textContent = `画质 · ${QUALITY_LABEL[params.quality as QualityKey]}`;
+  }
+  if (typeof savedSettings.beaming === 'number') {
+    params.beaming = savedSettings.beaming;
+    btnBeam.textContent = params.beaming > 0.6 ? '聚束 · 真实' : '聚束 · 电影';
+    btnBeam.classList.toggle('on', params.beaming > 0.6);
+  }
+} catch {
+  // 忽略损坏的设置
+}
+
 btnQuality.addEventListener('click', () => {
   const next = QUALITY_ORDER[(QUALITY_ORDER.indexOf(params.quality) + 1) % QUALITY_ORDER.length];
   params.quality = next;
   btnQuality.textContent = `画质 · ${QUALITY_LABEL[next]}`;
+  persistSettings();
   resize();
 });
 
@@ -227,6 +246,7 @@ btnBeam.addEventListener('click', () => {
   params.beaming = real ? 0.25 : 1.0;
   btnBeam.textContent = real ? '聚束 · 电影' : '聚束 · 真实';
   btnBeam.classList.toggle('on', real);
+  persistSettings();
 });
 
 // —— 救援关 NPC：失控货船（沿坠落轨道） ——
@@ -659,6 +679,59 @@ function updateCompanion(dtSim: number) {
   }
 }
 
+// —— 曲率跳跃：相对论星流隧道 ——
+function playWarpJump(onDone: () => void) {
+  const cv = document.createElement('canvas');
+  cv.style.cssText = 'position:fixed;inset:0;z-index:45;';
+  document.body.appendChild(cv);
+  cv.width = window.innerWidth;
+  cv.height = window.innerHeight;
+  const g = cv.getContext('2d')!;
+  const N = 420;
+  const stars = Array.from({ length: N }, () => ({
+    a: Math.random() * Math.PI * 2,
+    r: Math.random() * 60,
+    v: 0.4 + Math.random() * 2.4,
+    b: 0.4 + Math.random() * 0.6,
+  }));
+  const t0 = performance.now();
+  const DUR = 2300;
+  function frame() {
+    const t = performance.now() - t0;
+    const fade = t < 300 ? t / 300 : t > DUR - 500 ? Math.max(0, (DUR - t) / 500) : 1;
+    g.fillStyle = `rgba(2,3,8,${0.35})`;
+    g.fillRect(0, 0, cv.width, cv.height);
+    const cx = cv.width / 2;
+    const cy = cv.height / 2;
+    for (const st of stars) {
+      st.r *= 1.06 * st.v * 0.12 + 0.06;
+      if (st.r > Math.hypot(cx, cy)) {
+        st.r = Math.random() * 40;
+        st.a = Math.random() * Math.PI * 2;
+      }
+      const len = st.r * 0.14 * st.v;
+      const x1 = cx + Math.cos(st.a) * st.r;
+      const y1 = cy + Math.sin(st.a) * st.r;
+      const x2 = cx + Math.cos(st.a) * (st.r + len);
+      const y2 = cy + Math.sin(st.a) * (st.r + len);
+      // 越快越蓝（多普勒蓝移可视化）
+      const blue = Math.min(1, st.v / 2.8);
+      g.strokeStyle = `rgba(${Math.round(160 * st.b)},${Math.round(200 - 60 * blue)},${Math.round(255)},${st.b * fade})`;
+      g.lineWidth = 1 + blue;
+      g.beginPath();
+      g.moveTo(x1, y1);
+      g.lineTo(x2, y2);
+      g.stroke();
+    }
+    if (t < DUR) requestAnimationFrame(frame);
+    else {
+      cv.remove();
+      onDone();
+    }
+  }
+  frame();
+}
+
 // —— 星系系统切换 ——
 let currentSystem: StarSystem = SYSTEMS[0];
 
@@ -719,6 +792,7 @@ function showMenuMode() {
   markers.setVisible(false);
   shipVisual.group.visible = false;
   predictor.line.visible = false;
+  refreshDexCards();
   ui.showMenu(
     savedProgress(),
     SYSTEMS.slice(1).map((sys, idx) => ({
@@ -942,7 +1016,28 @@ const ui = new Ui({
       launchMission(sys.missionOffset);
     });
   },
+  onJumpSystem: (sysIdx) => {
+    const sys = SYSTEMS[sysIdx];
+    playWarpJump(() => {
+      applySystem(sys);
+      launchFreeFlight();
+      hud.toast(`抵达 ${sys.name} · ${sys.realName}`, 3200);
+    });
+  },
 });
+function refreshDexCards() {
+  const saved = savedProgress();
+  ui.setDexCards(
+    SYSTEMS.map(
+      (sys) => `<div class="eh-dex-card ${saved >= sys.unlockAfter ? '' : 'locked'}">
+        <h3>${saved >= sys.unlockAfter ? sys.name : '？？？ · 待解锁'}</h3>
+        <div class="row"><b>质量</b> ${sys.massSolar >= 1e6 ? (sys.massSolar / 1e6).toFixed(2) + ' 百万' : sys.massSolar} M☉ &nbsp;·&nbsp; <b>史瓦西半径</b> ${sys.rsKm >= 1e9 ? (sys.rsKm / 1e9).toFixed(1) + ' 亿 km' : sys.rsKm + ' km'} &nbsp;·&nbsp; <b>距离</b> ${sys.id === 'sgrA' ? '2.6 万' : sys.id === 'cygX1' ? '7,200' : '5,500 万'} 光年</div>
+        <div class="row">${saved >= sys.unlockAfter ? sys.fact : '完成巡礼前序任务后解锁档案。'}</div>
+      </div>`,
+    )
+    .join(''),
+  );
+}
 showMenuMode();
 
 // —— 键盘动作 ——

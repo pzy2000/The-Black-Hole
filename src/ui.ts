@@ -5,6 +5,7 @@ export interface UiCallbacks {
   onRetry: () => void;
   onMenu: () => void;
   onTourSystem: (systemIndex: number) => void;
+  onJumpSystem: (systemIndex: number) => void;
 }
 
 export interface TourOption {
@@ -74,13 +75,20 @@ export class Ui {
     this.modal.style.display = 'none';
     const btns = this.menu.querySelector('.eh-menu-btns') as HTMLElement;
     btns.innerHTML = '';
-    if (progressIndex > 0) {
+    if (progressIndex > 0 && progressIndex < 14) {
       btns.appendChild(
         this.button(`继续任务 · 第 ${progressIndex + 1} 关`, true, () => {
           this.hideAll();
           this.cb.onStartMission(progressIndex);
         }),
       );
+    }
+    if (progressIndex >= 14) {
+      const done = document.createElement('p');
+      done.className = 'eh-sub';
+      done.style.marginTop = '26px';
+      done.textContent = '✦ 巡礼已完成 — 三个黑洞，一次旅程';
+      btns.appendChild(done);
     }
     btns.appendChild(
       this.button(progressIndex > 0 ? '从头开始' : '开始任务', progressIndex === 0, () => {
@@ -94,6 +102,8 @@ export class Ui {
         this.cb.onFreeFlight();
       }),
     );
+    btns.appendChild(this.button('银心星图 · 曲率跳跃', false, () => this.showGalaxyMap()));
+    btns.appendChild(this.button('黑洞图鉴', false, () => this.showDex()));
     for (const opt of tour) {
       const b = this.button(opt.label, false, () => {
         this.hideAll();
@@ -171,6 +181,134 @@ export class Ui {
     btns.innerHTML = '';
     btns.appendChild(this.button('返回主菜单', true, () => this.showMenu(savedProgress())));
     this.modal.style.display = '';
+  }
+
+  /** 银心星图：对数比例尺方位图 + 可点击系统标记（仅解锁系统可跳） */
+  showGalaxyMap() {
+    this.hideAll();
+    let map = document.getElementById('eh-galaxymap');
+    if (!map) {
+      map = document.createElement('div');
+      map.id = 'eh-galaxymap';
+      map.className = 'eh-overlay';
+      map.innerHTML = `
+        <div class="eh-gm-panel">
+          <h2>银心星图</h2>
+          <p class="eh-gm-sub">对数比例尺 · 单位：光年 · 视界号曲率跳跃网络</p>
+          <div class="eh-gm-canvaswrap"><canvas></canvas></div>
+          <div class="eh-gm-marks"></div>
+          <div class="eh-modal-btns"><button class="eh-gm-back">返回</button></div>
+        </div>`;
+      document.body.appendChild(map);
+      map.querySelector('.eh-gm-back')!.addEventListener('click', () => {
+        map!.style.display = 'none';
+        this.showMenu(savedProgress());
+      });
+    }
+    map.style.display = '';
+    const marks = map.querySelector('.eh-gm-marks') as HTMLElement;
+    marks.innerHTML = '';
+    const canvas = map.querySelector('canvas') as HTMLCanvasElement;
+    const W = 720;
+    const H = 380;
+    canvas.width = W;
+    canvas.height = H;
+    const g = canvas.getContext('2d')!;
+    // 背景：银河尘带
+    g.fillStyle = '#04050c';
+    g.fillRect(0, 0, W, H);
+    for (let i = 0; i < 400; i++) {
+      const x = Math.random() * W;
+      const y = H / 2 + Math.sin(x / W * Math.PI * 2 + 1) * (30 + Math.random() * 26) + (Math.random() - 0.5) * 22;
+      g.fillStyle = `rgba(255,255,255,${0.03 + Math.random() * 0.12})`;
+      g.fillRect(x, y, 1.3, 1.3);
+    }
+    // 连线：太阳 → 各黑洞（虚线弧）
+    const pos = (i: number): [number, number] => {
+      const anchors: [number, number][] = [[W - 90, H / 2 + 6], [W - 300, H / 2 - 44], [110, H / 2 - 20]];
+      return anchors[i];
+    };
+    g.strokeStyle = 'rgba(140,190,255,0.25)';
+    g.setLineDash([4, 5]);
+    for (let i = 1; i < 3; i++) {
+      g.beginPath();
+      g.moveTo(pos(0)[0], pos(0)[1]);
+      g.quadraticCurveTo((pos(0)[0] + pos(i)[0]) / 2, Math.min(pos(0)[1], pos(i)[1]) - 40, pos(i)[0], pos(i)[1]);
+      g.stroke();
+    }
+    g.setLineDash([]);
+    // 标记点
+    for (let i = 0; i < 3; i++) {
+      const [x, y] = pos(i);
+      g.beginPath();
+      g.arc(x, y, 5, 0, Math.PI * 2);
+      g.fillStyle = '#ffd9a8';
+      g.fill();
+      g.font = '11px "PingFang SC", sans-serif';
+      g.textAlign = 'center';
+    }
+    const labels = ['太阳', '天鹅座 X-1 · 7,200 ly', '人马座 A* · 26,000 ly', ''];
+    // 太阳
+    const [sx, sy] = pos(0);
+    g.fillStyle = '#9fd8ff';
+    g.fillText('太阳（出发点）', sx - 40, sy + 26);
+    // 三个系统标记按钮（HTML，覆盖在 canvas 上）
+    const saved = savedProgress();
+    const sysDefs = [
+      { name: '人马座 A*', dist: '26,000 光年', unlocked: true, sysIndex: 0 },
+      { name: '天鹅座 X-1', dist: '7,200 光年', unlocked: saved >= 8, sysIndex: 1 },
+      { name: 'M87*', dist: '5,500 万光年', unlocked: saved >= 11, sysIndex: 2 },
+    ];
+    // 人马座 A* 与 M87 标记错开：Sgr A* 在左侧
+    const anchors = [[W - 300, H / 2 - 44], [W - 90, H / 2 + 6], [110, H / 2 - 20]];
+    sysDefs.forEach((sd, i) => {
+      const b = document.createElement('button');
+      b.className = 'eh-gm-mark';
+      b.innerHTML = `${sd.name}<br><span>${sd.dist}</span><br><em>${sd.unlocked ? '跳跃' : '未解锁'}</em>`;
+      const [ax, ay] = anchors[i];
+      b.style.left = `${(ax / W) * 100}%`;
+      b.style.top = `${(ay / H) * 100}%`;
+      if (!sd.unlocked) {
+        (b as HTMLButtonElement).disabled = true;
+        b.style.opacity = '0.35';
+      } else {
+        b.addEventListener('click', () => {
+          map!.style.display = 'none';
+          this.cb.onJumpSystem(sd.sysIndex);
+        });
+      }
+      marks.appendChild(b);
+    });
+  }
+
+  /** 黑洞图鉴：三张真实档案卡 */
+  showDex() {
+    this.hideAll();
+    let dex = document.getElementById('eh-dex');
+    if (!dex) {
+      dex = document.createElement('div');
+      dex.id = 'eh-dex';
+      dex.className = 'eh-overlay';
+      dex.innerHTML = `
+        <div class="eh-dex-panel">
+          <h2>黑洞图鉴</h2>
+          <div class="eh-dex-cards"></div>
+          <div class="eh-modal-btns"><button class="eh-dex-back">返回</button></div>
+        </div>`;
+      document.body.appendChild(dex);
+      dex.querySelector('.eh-dex-back')!.addEventListener('click', () => {
+        dex!.style.display = 'none';
+        this.showMenu(savedProgress());
+      });
+    }
+    dex.style.display = '';
+    // 卡片内容由 main.ts 注入（保留最新解锁状态）
+    const cards = dex.querySelector('.eh-dex-cards') as HTMLElement;
+    cards.innerHTML = (window as unknown as { __dexCards?: string }).__dexCards ?? '';
+  }
+
+  setDexCards(html: string) {
+    (window as unknown as { __dexCards?: string }).__dexCards = html;
   }
 
   hideAll() {
