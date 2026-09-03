@@ -191,12 +191,12 @@ vec3 starField(vec3 d) {
   c += starLayer(d, 90.0, 0.26, 0.38);
   c += starLayer(d, 170.0, 0.2, 0.26);
   float band = dot(d, uMwNormal);
-  float mw = exp(-band * band * 18.0);
+  float mw = exp(-band * band * 26.0);
   float cl = fbm3(d * 4.5 + vec3(9.2, 1.7, 4.4));
   float dust = fbm3(d * 8.0 - vec3(5.0, 3.0, 8.0));
   vec3 mwCol = mix(vec3(0.45, 0.6, 1.0), vec3(1.0, 0.85, 0.65), cl);
   float lanes = 1.0 - 0.75 * smoothstep(0.35, 0.75, dust) * mw;
-  c += mwCol * (mw * (0.10 + 0.30 * cl) * lanes);
+  c += mwCol * (mw * (0.035 + 0.14 * cl) * lanes);
   c += vec3(0.001, 0.0015, 0.003);
   return c;
 }
