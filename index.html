@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>事件视界 · EVENT HORIZON</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="ui">
+    <header>
+      <h1>事件视界</h1>
+      <p class="sub">EVENT HORIZON — 广义相对论实时渲染</p>
+    </header>
+    <div id="panel">
+      <button id="btnOrbit" class="on">自动巡航</button>
+      <button id="btnQuality">画质 · 中</button>
+      <button id="btnBeam" class="on">聚束 · 真实</button>
+    </div>
+    <footer>拖拽旋转 · 滚轮缩放 — 画面由史瓦西时空逐光线积分实时生成</footer>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
