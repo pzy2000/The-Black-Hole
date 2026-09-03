@@ -4,6 +4,13 @@ export interface UiCallbacks {
   onFreeFlight: () => void;
   onRetry: () => void;
   onMenu: () => void;
+  onTourSystem: (systemIndex: number) => void;
+}
+
+export interface TourOption {
+  label: string;
+  locked: boolean;
+  sysIndex: number;
 }
 
 export class Ui {
@@ -63,7 +70,7 @@ export class Ui {
     return b;
   }
 
-  showMenu(progressIndex: number) {
+  showMenu(progressIndex: number, tour: TourOption[] = []) {
     this.modal.style.display = 'none';
     const btns = this.menu.querySelector('.eh-menu-btns') as HTMLElement;
     btns.innerHTML = '';
@@ -87,6 +94,17 @@ export class Ui {
         this.cb.onFreeFlight();
       }),
     );
+    for (const opt of tour) {
+      const b = this.button(opt.label, false, () => {
+        this.hideAll();
+        this.cb.onTourSystem(opt.sysIndex);
+      });
+      if (opt.locked) {
+        b.disabled = true;
+        b.style.opacity = '0.35';
+      }
+      btns.appendChild(b);
+    }
     this.menu.style.display = '';
   }
 

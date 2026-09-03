@@ -11,6 +11,7 @@ import { createShipVisual, integrateShip, OrbitPredictor } from './ship';
 import { appendUiStyles, Ui, savedProgress, saveProgress } from './ui';
 import { Markers } from './markers';
 import { MISSIONS, type MissionCtx, type MissionFx, type MissionWaypoint } from './missions';
+import { SYSTEMS, systemByMission, companionPos, type StarSystem } from './systems';
 import { buildSky, dirToEquirect, starLabel, type NamedStar } from './sky';
 import {
   gravityAccel,
@@ -467,6 +468,210 @@ const fx: MissionFx = {
   },
 };
 
+// —— 伴星（蓝超巨星）与洛希瓣物质流 ——
+interface CompanionRuntime {
+  group: THREE.Group;
+  label: HTMLElement;
+  pos: THREE.Vector3;
+}
+let companion: CompanionRuntime | null = null;
+let rocheStream: THREE.Mesh | null = null;
+
+function starSurfaceMaterial(tempK: number): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: { uTemp: { value: tempK }, uTime: { value: 0 } },
+    vertexShader: /* glsl */ `
+      varying vec3 vNormalW;
+      varying vec3 vWorldPos;
+      varying vec3 vPosL;
+      void main() {
+        vNormalW = normalize(mat3(modelMatrix) * normal);
+        vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+        vPosL = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      precision highp float;
+      varying vec3 vNormalW;
+      varying vec3 vWorldPos;
+      varying vec3 vPosL;
+      uniform float uTemp;
+      uniform float uTime;
+      float hash13(vec3 p3) {
+        p3 = fract(p3 * 0.1031);
+        p3 += dot(p3, p3.zyx + 31.32);
+        return fract((p3.x + p3.y) * p3.z);
+      }
+      float vnoise3(vec3 p) {
+        vec3 i = floor(p); vec3 f = fract(p);
+        vec3 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(mix(hash13(i), hash13(i + vec3(1,0,0)), u.x), mix(hash13(i + vec3(0,1,0)), hash13(i + vec3(1,1,0)), u.x), u.y),
+          mix(mix(hash13(i + vec3(0,0,1)), hash13(i + vec3(1,0,1)), u.x), mix(hash13(i + vec3(0,1,1)), hash13(i + vec3(1,1,1)), u.x), u.y), u.z);
+      }
+      vec3 blackbody(float kelvin) {
+        float t = clamp(kelvin, 1000.0, 40000.0) / 100.0;
+        float r; float g; float b;
+        if (t <= 66.0) { r = 255.0; g = 99.4708 * log(t) - 161.1196; }
+        else { r = 329.6987 * pow(t - 60.0, -0.1332); g = 288.1222 * pow(t - 60.0, -0.0755); }
+        if (t >= 66.0) { b = 255.0; } else if (t <= 19.0) { b = 0.0; }
+        else { b = 138.5177 * log(t - 10.0) - 305.0448; }
+        vec3 c = clamp(vec3(r, g, b) / 255.0, vec3(0.0), vec3(1.0));
+        return pow(c, vec3(2.2));
+      }
+      void main() {
+        // 临边昏暗：视向越切，表面越暗
+        float limb = pow(max(dot(vNormalW, normalize(cameraPosition - vWorldPos)), 0.0), 0.45);
+        // 米粒组织
+        float g1 = vnoise3(vPosL * 2.2 + vec3(uTime * 0.02));
+        float g2 = vnoise3(vPosL * 5.5 - vec3(uTime * 0.03));
+        float gran = 0.82 + 0.18 * g1 + 0.08 * g2;
+        vec3 col = blackbody(uTemp) * limb * gran * 1.6;
+        // 色球层边缘泛红
+        float rim = pow(1.0 - limb, 2.5);
+        col += vec3(1.0, 0.45, 0.2) * rim * 0.35;
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+}
+
+function spawnCompanion(sys: StarSystem) {
+  const c = sys.companion!;
+  const group = new THREE.Group();
+  const star = new THREE.Mesh(new THREE.SphereGeometry(c.radius, 48, 32), starSurfaceMaterial(c.temp));
+  group.add(star);
+  const corona = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowTexture(0xbfd8ff),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.85,
+    }),
+  );
+  corona.scale.set(c.radius * 6, c.radius * 6, 1);
+  group.add(corona);
+  compScene.add(group);
+
+  const label = document.createElement('div');
+  label.className = 'eh-marker-label';
+  label.style.color = '#cfe4ff';
+  label.innerHTML = `★ ${c.name}<br><span class="dist"></span>`;
+  (document.getElementById('eh-markers') ?? document.body).appendChild(label);
+
+  const pos = companionPos(sys, state.simTime, new THREE.Vector3());
+  companion = { group, label, pos };
+
+  // 洛希瓣物质流：伴星表面 → 吸积盘外缘
+  const l1 = pos.clone().multiplyScalar(1 - c.radius / pos.length() * 0.9);
+  const curve = new THREE.CatmullRomCurve3([
+    pos.clone().multiplyScalar(1 - c.radius / pos.length()),
+    new THREE.Vector3(50, 2.2, 9),
+    new THREE.Vector3(36, 1.8, 10),
+    new THREE.Vector3(24, 0.8, 5.5),
+    new THREE.Vector3(sys.disk.outer - 0.4, 0.05, 0.5),
+  ]);
+  const tube = new THREE.Mesh(
+    new THREE.TubeGeometry(curve, 160, 0.3, 8, false),
+    new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uExposure: { value: 1.2 } },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv2;
+        void main() {
+          vUv2 = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        varying vec2 vUv2;
+        uniform float uTime;
+        uniform float uExposure;
+        float hash12(vec2 p) {
+          vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+          p3 += dot(p3, p3.yzx + 33.33);
+          return fract((p3.x + p3.y) * p3.z);
+        }
+        float vnoise2(vec2 p) {
+          vec2 i = floor(p); vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash12(i), hash12(i + vec2(1,0)), u.x), mix(hash12(i + vec2(0,1)), hash12(i + vec2(1,1)), u.x), u.y);
+        }
+        void main() {
+          // 沿流向滚动的湍流丝缕
+          float n = vnoise2(vec2(vUv2.x * 26.0 - uTime * 0.9, vUv2.y * 7.0));
+          n = 0.45 + 0.55 * n;
+          float ends = smoothstep(0.0, 0.12, vUv2.x) * (1.0 - smoothstep(0.85, 1.0, vUv2.x));
+          vec3 warm = vec3(1.0, 0.82, 0.6);
+          vec3 cool = vec3(0.75, 0.85, 1.0);
+          vec3 col = mix(cool, warm, vUv2.x) * n * uExposure * 0.9;
+          float alpha = 0.42 * ends;
+          gl_FragColor = vec4(col * ends, alpha);
+        }
+      `,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      side: THREE.DoubleSide,
+    }),
+  );
+  compScene.add(tube);
+  rocheStream = tube;
+}
+
+function removeCompanion() {
+  if (!companion) return;
+  compScene.remove(companion.group);
+  companion.label.remove();
+  companion = null;
+  if (rocheStream) {
+    compScene.remove(rocheStream);
+    rocheStream.geometry.dispose();
+    rocheStream = null;
+  }
+}
+
+const tmpV3 = new THREE.Vector3();
+function updateCompanion(dtSim: number) {
+  if (!companion) return;
+  const sys = currentSystem;
+  companionPos(sys, state.simTime, tmpV3);
+  companion.pos.copy(tmpV3);
+  companion.group.position.copy(tmpV3);
+  const mat = (companion.group.children[0] as THREE.Mesh).material as THREE.ShaderMaterial;
+  mat.uniforms.uTime.value += dtSim;
+  if (rocheStream) {
+    (rocheStream.material as THREE.ShaderMaterial).uniforms.uTime.value += dtSim;
+  }
+  // 标签
+  const d = ship.pos.distanceTo(companion.pos);
+  const p = companion.pos.clone().project(camera);
+  if (p.z > 1 || Math.abs(p.x) > 1.1 || Math.abs(p.y) > 1.1) {
+    companion.label.style.display = 'none';
+  } else {
+    companion.label.style.display = '';
+    companion.label.style.left = `${(p.x * 0.5 + 0.5) * window.innerWidth}px`;
+    companion.label.style.top = `${(-p.y * 0.5 + 0.5) * window.innerHeight}px`;
+    (companion.label.querySelector('.dist') as HTMLElement).textContent = `${d.toFixed(1)} Rs`;
+  }
+}
+
+// —— 星系系统切换 ——
+let currentSystem: StarSystem = SYSTEMS[0];
+
+function applySystem(sys: StarSystem) {
+  currentSystem = sys;
+  bhUniforms.uDiskOuter.value = sys.disk.outer;
+  bhUniforms.uTempPeak.value = sys.disk.tempPeak;
+  bhUniforms.uExposure.value = sys.disk.exposure;
+  bhUniforms.uJet.value = sys.jet;
+  bhUniforms.uStream.value = sys.stream;
+  removeCompanion();
+  if (sys.companion) spawnCompanion(sys);
+}
+
 const ctx: MissionCtx = {
   ship,
   state,
@@ -474,6 +679,11 @@ const ctx: MissionCtx = {
   toast: (m) => hud.toast(m, 2600),
   lookAlong: lookAlongDir,
   fx,
+  companionPos: () => (companion ? companion.pos : null),
+  nearCompanion(dist: number) {
+    if (!companion) return false;
+    return ship.pos.distanceTo(companion.pos) < dist;
+  },
 };
 
 function setObjectiveHud() {
@@ -498,6 +708,7 @@ function showMenuMode() {
   state.paused = true;
   missionIndex = -1;
   state.warp = 1;
+  applySystem(SYSTEMS[0]);
   removeDerelict();
   finaleChoiceShown = false;
   finaleMode = 'none';
@@ -506,7 +717,14 @@ function showMenuMode() {
   markers.setVisible(false);
   shipVisual.group.visible = false;
   predictor.line.visible = false;
-  ui.showMenu(savedProgress());
+  ui.showMenu(
+    savedProgress(),
+    SYSTEMS.slice(1).map((sys, idx) => ({
+      label: `巡礼 · ${sys.name}${savedProgress() < sys.unlockAfter ? '（待解锁）' : ''}`,
+      locked: savedProgress() < sys.unlockAfter,
+      sysIndex: idx + 1,
+    })),
+  );
 }
 
 function launchMission(i: number) {
@@ -517,6 +735,12 @@ function launchMission(i: number) {
   flags.clear();
   heatWarned = false;
   activeWaypoints = mission.waypoints ?? [];
+  const sys = systemByMission(i);
+  if (sys.id !== currentSystem.id) {
+    applySystem(sys);
+    fx.flash();
+    hud.toast(`曲率跳跃 → ${sys.name}（${sys.realName}）`, 3200);
+  }
   state.mode = 'flight';
   state.paused = false;
   state.warp = 1;
@@ -591,6 +815,10 @@ function updateHeat(dtSim: number) {
   const r = ship.pos.length();
   const y = Math.abs(ship.pos.y);
   let rate = 90 / (r * r); // 黑洞辐射基线
+  if (companion) {
+    const d = ship.pos.distanceTo(companion.pos);
+    rate += 120 / (d * d); // 伴星辐照
+  }
   if (r < 14 && r > 2.8 && y < 2.5) rate += (450 / (r * r)) * (1 - y / 2.5); // 贴近盘面
   rate -= 1.4; // 主动冷却
   ship.heat = Math.min(130, Math.max(0, ship.heat + rate * dtSim));
@@ -668,6 +896,13 @@ const ui = new Ui({
   onFreeFlight: launchFreeFlight,
   onRetry: () => launchMission(missionIndex),
   onMenu: showMenuMode,
+  onTourSystem: (sysIdx) => {
+    const sys = SYSTEMS[sysIdx];
+    ui.showBrief(`巡礼 · ${sys.name}`, [sys.fact, '曲率跳跃引擎已充能。'], () => {
+      fx.flash();
+      launchMission(sys.missionOffset);
+    });
+  },
 });
 showMenuMode();
 
@@ -776,11 +1011,22 @@ function updateCamera(dt: number) {
   get obj() {
     return objectiveIdx;
   },
+  get frames() {
+    return frame;
+  },
+  get compDist() {
+    return companion ? ship.pos.distanceTo(companion.pos) : -1;
+  },
+  get compExists() {
+    return !!companion;
+  },
   get derelictPos() {
     return derelict ? derelict.pos.toArray() : null;
   },
   launchMission: (i: number) => launchMission(i),
   startFree: () => launchFreeFlight(),
+  // 手动驱动模拟（自动化测试用，与 rAF 兼容）
+  step: (dt: number) => stepSimulation(Math.min(dt, 1.0)),
   // 将飞船姿态对准给定方向（默认沿速度方向）
   lookAlong(x: number, y: number, z: number) {
     lookAlongDir(x, y, z);
@@ -792,17 +1038,8 @@ const clock = new THREE.Clock();
 const thrustDir = new THREE.Vector3();
 const tmpDir = new THREE.Vector3();
 let frame = 0;
-function tick() {
-  requestAnimationFrame(tick);
-  const dt = Math.min(clock.getDelta(), 0.05);
+function stepSimulation(dt: number) {
   frame++;
-
-  if (state.mode === 'photo') {
-    controls.update();
-    bhUniforms.uTime.value += dt;
-    renderPipeline();
-    return;
-  }
 
   updateAttitude(dt);
 
@@ -893,6 +1130,7 @@ function tick() {
       }
     }
     updateDerelict(dt * state.warp);
+    updateCompanion(dt * state.warp);
     updateFinale();
     markers.update(camera, bhUniforms.uTime.value);
   }
@@ -908,6 +1146,21 @@ function tick() {
       compScene.remove(p.sprite);
       probes.splice(i, 1);
     }
+  }
+
+}
+
+let lastTickAt = Date.now();
+function tick() {
+  requestAnimationFrame(tick);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  lastTickAt = Date.now();
+
+  if (state.mode === 'photo') {
+    controls.update();
+    bhUniforms.uTime.value += dt;
+    renderPipeline();
+    return;
   }
 
   shipVisual.group.position.copy(ship.pos);
@@ -997,9 +1250,6 @@ function takePhoto() {
   });
 }
 
-renderPipeline();
-tick();
-
 function renderPipeline() {
   camera.updateMatrixWorld();
   bhUniforms.uCamWorld.value.copy(camera.matrixWorld);
@@ -1010,5 +1260,20 @@ function renderPipeline() {
   renderer.setRenderTarget(null);
   composer.render();
 }
+
+// 页面被浏览器节流（后台标签/最小化）时，用定时器兜底驱动模拟
+let simAcc = 0;
+setInterval(() => {
+  if (Date.now() - lastTickAt > 300) {
+    simAcc += 1 / 60;
+    let steps = 0;
+    while (simAcc >= 1 / 60 && steps < 30) {
+      stepSimulation(1 / 60);
+      simAcc -= 1 / 60;
+      steps++;
+    }
+  }
+}, 1000 / 60);
+
 renderPipeline();
 tick();

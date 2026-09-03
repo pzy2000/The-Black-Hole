@@ -20,6 +20,9 @@ export interface MissionCtx {
   toast(msg: string): void;
   lookAlong(x: number, y: number, z: number): void;
   fx: MissionFx;
+  /** 伴星实时位置（无伴星系统返回 null） */
+  companionPos(): THREE.Vector3 | null;
+  nearCompanion(dist: number): boolean;
 }
 
 export interface Mission {
@@ -277,5 +280,105 @@ export const MISSIONS: Mission[] = [
       { text: '逃逸至 12 Rs 以外', check: (c) => c.ship.pos.length() > 12 },
     ],
     special: 'finale',
+  },
+  {
+    title: '巡礼 · 遇见天鹅座 X-1',
+    brief: [
+      '曲率跳跃完成。7200 光年外，人类确认的第一个黑洞出现在舷窗外。',
+      '它正从伴星——蓝超巨星 HDE 226868 身上撕下物质。那颗星比太阳大几十倍，表面温度是太阳的四倍。',
+      '抵近它，采集星风数据。记住：这颗星的辐射，和它的体量一样不讲道理。',
+    ],
+    complete: [
+      '星风数据完整。这颗蓝超巨星每百万年就被邻居吃掉一个太阳的质量。',
+      '霍金当年赌它不是黑洞，输了。现在你亲眼确认了。',
+    ],
+    setup: (ctx) => {
+      ctx.ship.pos.set(45, 4, 20);
+      const tangent = new THREE.Vector3(-ctx.ship.pos.z, 0, ctx.ship.pos.x).normalize();
+      ctx.ship.vel.copy(tangent.multiplyScalar(Math.sqrt(0.5 * ctx.ship.pos.length() / (ctx.ship.pos.length() - 1) ** 2)));
+      ctx.ship.fuel = FUEL_MAX;
+      ctx.ship.heat = 0;
+      ctx.ship.alive = true;
+      ctx.lookAlong(tangent.x, tangent.y, tangent.z);
+    },
+    objectives: [
+      { text: '抵近伴星 HDE 226868 至 18 Rs 以内', check: (c) => c.nearCompanion(18) },
+      { text: '按 T 采集星风数据（18 Rs 以内）', check: (c) => c.flags.has('wind') },
+      { text: '撤离至黑洞 30 Rs 以外', check: (c) => c.ship.pos.length() > 30 },
+    ],
+    onKey: (code, ctx) => {
+      const cp = ctx.companionPos();
+      if (code === 'KeyT' && cp && !ctx.flags.has('wind')) {
+        const d = ctx.ship.pos.distanceTo(new THREE.Vector3(cp.x, cp.y, cp.z));
+        if (d < 18) {
+          ctx.flags.add('wind');
+          ctx.fx.flash();
+          ctx.toast('星风数据已存档');
+        }
+      }
+    },
+  },
+  {
+    title: '巡礼 · 洛希瓣之河',
+    brief: [
+      '从蓝超巨星流向黑洞的物质流，就是一座悬在太空中的河流。',
+      '沿着它飞行，在河流中段采集一份"正在落向永恒"的物质样本。',
+      '河流的尽头是吸积盘——那里的温度足以照亮整个星系的这一角。',
+    ],
+    complete: ['样本封存：物质流中的温度、密度与速度剖面完整回收。', '这是人类第一次从河流内部观察一条物质之河。'],
+    waypoints: [{ pos: [38, 1.5, 0], label: '物质流采样点', radius: 6, color: 0x9fc8ff }],
+    setup: (ctx) => {
+      ctx.ship.pos.set(55, 3, 14);
+      const tangent = new THREE.Vector3(-ctx.ship.pos.z, 0, ctx.ship.pos.x).normalize();
+      ctx.ship.vel.copy(tangent.multiplyScalar(Math.sqrt(0.5 * ctx.ship.pos.length() / (ctx.ship.pos.length() - 1) ** 2)));
+      ctx.ship.fuel = FUEL_MAX;
+      ctx.ship.heat = 0;
+      ctx.ship.alive = true;
+      ctx.lookAlong(tangent.x, tangent.y, tangent.z);
+    },
+    objectives: [
+      { text: '抵达物质流采样点', check: (c) => c.flags.has('wp0') },
+      { text: '按 T 采集河流样本（采样点附近）', check: (c) => c.flags.has('stream') },
+      { text: '顺流而下：抵达黑洞 8 Rs 以内', check: (c) => c.ship.pos.length() < 8 },
+    ],
+    onKey: (code, ctx) => {
+      if (code === 'KeyT' && ctx.flags.has('wp0') && !ctx.flags.has('stream')) {
+        ctx.flags.add('stream');
+        ctx.fx.spawnProbe(ctx.ship.pos);
+        ctx.fx.flash();
+        ctx.toast('河流样本已采集');
+      }
+    },
+  },
+  {
+    title: '巡礼 · X 射线之眼',
+    brief: [
+      '天鹅座 X-1 之所以被发现，是因为它极强的 X 射线辐射。',
+      '把 X 射线探测器送进 6 Rs 以内的强辐射区，"看"一眼这头怪兽的正脸。',
+      '它的盘比人马座 A* 的热得多——船温管理将是真正的考验。',
+    ],
+    complete: ['X 射线能谱数据完整回收。', '人类的第一颗 X 射线卫星就是因为发现它而得名的——现在，你替它再飞了一次。'],
+    setup: (ctx) => {
+      ctx.ship.pos.set(14, 1.5, 0);
+      const tangent = new THREE.Vector3(-ctx.ship.pos.z, 0, ctx.ship.pos.x).normalize();
+      ctx.ship.vel.copy(tangent.multiplyScalar(Math.sqrt(0.5 * ctx.ship.pos.length() / (ctx.ship.pos.length() - 1) ** 2)));
+      ctx.ship.fuel = FUEL_MAX;
+      ctx.ship.heat = 0;
+      ctx.ship.alive = true;
+      ctx.lookAlong(tangent.x, tangent.y, tangent.z);
+    },
+    objectives: [
+      { text: '深入强辐射区：进入 6 Rs 以内', check: (c) => c.ship.pos.length() < 6 },
+      { text: '释放 X 射线探测器（6 Rs 以内按 T）', check: (c) => c.flags.has('xray') },
+      { text: '全身而退：撤离至 30 Rs 以外', check: (c) => c.ship.pos.length() > 30 },
+    ],
+    onKey: (code, ctx) => {
+      if (code === 'KeyT' && ctx.ship.pos.length() < 6 && !ctx.flags.has('xray')) {
+        ctx.flags.add('xray');
+        ctx.fx.spawnProbe(ctx.ship.pos);
+        ctx.fx.flash();
+        ctx.toast('X 射线探测器已释放');
+      }
+    },
   },
 ];
