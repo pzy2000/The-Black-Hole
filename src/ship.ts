@@ -169,6 +169,8 @@ export function integrateShip(
     ship.fuel = Math.max(0, ship.fuel - thrustUsed);
     if (ship.fuel <= 0) thrustAccel.set(0, 0, 0);
   }
-  v.copy(ship.vel);
+  // 速度硬上限 0.95c（游戏性保护，时间膨胀公式已另有钳制）
+  const spd = ship.vel.length();
+  if (spd > 0.95) ship.vel.multiplyScalar(0.95 / spd);
   return { crashed, thrustUsed };
 }

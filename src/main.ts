@@ -12,6 +12,7 @@ import { appendUiStyles, Ui, savedProgress, saveProgress } from './ui';
 import { Markers } from './markers';
 import { MISSIONS, type MissionCtx, type MissionFx, type MissionWaypoint } from './missions';
 import {
+  gravityAccel,
   initialShip,
   maxWarpFor,
   WARP_STEPS,
@@ -115,6 +116,8 @@ const bhUniforms = {
   uFlowPeriod: { value: 26.0 },
   uPixelAngle: { value: 0.001 },
   uMwNormal: { value: new THREE.Vector3(0.45, 0.8, 0.35).normalize() },
+  uJet: { value: 1.0 },
+  uStream: { value: 1.0 },
 };
 
 const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -201,6 +204,170 @@ btnBeam.addEventListener('click', () => {
   btnBeam.classList.toggle('on', real);
 });
 
+// —— 救援关 NPC：失控货船（沿坠落轨道） ——
+let derelict: {
+  mesh: THREE.Group;
+  label: HTMLElement;
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  docked: boolean;
+} | null = null;
+
+function spawnDerelict() {
+  const mesh = new THREE.Group();
+  const hull = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2, 0.13, 0.36),
+    new THREE.MeshStandardMaterial({ color: 0x4a4640, metalness: 0.6, roughness: 0.6 }),
+  );
+  mesh.add(hull);
+  const beacon = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowTexture(0xff5a4a),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+    }),
+  );
+  beacon.scale.set(0.5, 0.5, 1);
+  mesh.add(beacon);
+  compScene.add(mesh);
+
+  const label = document.createElement('div');
+  label.className = 'eh-marker-label';
+  label.style.color = '#ff9d8c';
+  label.innerHTML = `◈ 失控货船<br><span class="dist"></span>`;
+  (document.getElementById('eh-markers') ?? document.body).appendChild(label);
+
+  derelict = {
+    mesh,
+    label,
+    pos: new THREE.Vector3(20, 4, -6),
+    vel: new THREE.Vector3(-0.12, -0.02, -0.02),
+    docked: false,
+  };
+}
+
+function removeDerelict() {
+  if (!derelict) return;
+  compScene.remove(derelict.mesh);
+  derelict.label.remove();
+  derelict = null;
+}
+
+const tmpV2 = new THREE.Vector3();
+function updateDerelict(dtSim: number) {
+  if (!derelict) return;
+  if (!derelict.docked) {
+    const h = 0.02;
+    let remain = dtSim;
+    while (remain > 1e-6) {
+      const step = Math.min(h, remain);
+      remain -= step;
+      gravityAccel(derelict.pos, tmpV2);
+      derelict.vel.addScaledVector(tmpV2, step);
+      derelict.pos.addScaledVector(derelict.vel, step);
+      if (derelict.pos.length() < 1.05) {
+        const mission = MISSIONS[missionIndex];
+        if (mission?.special === 'derelict' && !flags.has('dock')) {
+          removeDerelict();
+          failMission('货船坠入了视界。一千名冬眠者，成了永恒的一部分。');
+          return;
+        }
+        break;
+      }
+    }
+  } else {
+    derelict.pos.copy(ship.pos);
+  }
+  derelict.mesh.position.copy(derelict.pos);
+  derelict.mesh.rotation.y += 0.01 * state.warp;
+
+  const d = ship.pos.distanceTo(derelict.pos);
+  if (d < 1.2) flags.add('near');
+  const p = derelict.pos.clone().project(camera);
+  if (p.z > 1 || Math.abs(p.x) > 1.1 || Math.abs(p.y) > 1.1) {
+    derelict.label.style.display = 'none';
+  } else {
+    derelict.label.style.display = '';
+    derelict.label.style.left = `${(p.x * 0.5 + 0.5) * window.innerWidth}px`;
+    derelict.label.style.top = `${(-p.y * 0.5 + 0.5) * window.innerHeight}px`;
+    (derelict.label.querySelector('.dist') as HTMLElement).textContent = `${d.toFixed(1)} Rs`;
+  }
+}
+
+// —— 终章：双结局 ——
+let finaleChoiceShown = false;
+let finaleMode: 'none' | 'escape' | 'fall' = 'none';
+let finaleEscapeT = 0;
+const fadeEl = document.createElement('div');
+fadeEl.style.cssText =
+  'position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:35;transition:opacity 0.4s;';
+document.body.appendChild(fadeEl);
+
+function offerFinaleChoice() {
+  finaleChoiceShown = true;
+  state.paused = true;
+  ui.showChoice(
+    '视界在你面前',
+    [
+      '船体在 2.6 Rs 处震颤——已越过光子球，天空中的黑圆比太阳大一百倍。',
+      '返航窗口只剩最后几秒——越过它，任何引擎都无法再改写结局。',
+    ],
+    [
+      {
+        label: '点燃返航引擎（结局 A）',
+        primary: true,
+        cb: () => {
+          ui.hideAll();
+          flags.add('chosen');
+          finaleMode = 'escape';
+          finaleEscapeT = 0;
+          state.paused = false;
+          {
+            const r = ship.pos.length();
+            const vEsc = Math.min(0.92, Math.sqrt(1 / Math.max(r - 1, 0.2)) * 1.08);
+            ship.vel.copy(ship.pos).normalize().multiplyScalar(vEsc);
+          }
+          fx.flash();
+          hud.toast('返航引擎 · 全功率点火', 3000);
+        },
+      },
+      {
+        label: '继续坠落（结局 B）',
+        cb: () => {
+          ui.hideAll();
+          flags.add('chosen');
+          finaleMode = 'fall';
+          state.paused = false;
+          hud.toast('引擎熄火。让引力接管一切。', 3000);
+        },
+      },
+    ],
+  );
+}
+
+function updateFinale() {
+  if (missionIndex < 0 || MISSIONS[missionIndex]?.special !== 'finale') return;
+  if (!flags.has('chosen') && !finaleChoiceShown && ship.pos.length() < 2.6) {
+    offerFinaleChoice();
+    return;
+  }
+  if (finaleMode === 'fall') {
+    const r = ship.pos.length();
+    fadeEl.style.opacity = String(Math.min(1, Math.max(0, (1.3 - r) / 0.3)));
+    if (r < 1.04) {
+      finaleMode = 'none';
+      fadeEl.style.opacity = '0';
+      state.paused = true;
+      ui.showEnding('结局 B · 坠入永恒', [
+        '在越过视界的那一刻，你没有感到任何异样——广义相对论早就预言了这一点。',
+        '但你发出的每一束光，都永远留在了外面。',
+        '对宇宙而言，你只是被拉长为一线微弱的红移，缓缓写下，再也不会被读到。',
+      ]);
+    }
+  }
+}
+
 // —— 任务系统 ——
 appendUiStyles();
 const markers = new Markers();
@@ -239,6 +406,13 @@ function glowTexture(hex: number): THREE.Texture {
   return tex;
 }
 const fx: MissionFx = {
+  dockDerelict() {
+    if (derelict && !derelict.docked) {
+      derelict.docked = true;
+      return true;
+    }
+    return false;
+  },
   flash() {
     let el = document.getElementById('eh-flash');
     if (!el) {
@@ -301,6 +475,10 @@ function showMenuMode() {
   state.paused = true;
   missionIndex = -1;
   state.warp = 1;
+  removeDerelict();
+  finaleChoiceShown = false;
+  finaleMode = 'none';
+  fadeEl.style.opacity = '0';
   hud.setVisible(false);
   markers.setVisible(false);
   shipVisual.group.visible = false;
@@ -323,6 +501,12 @@ function launchMission(i: number) {
   state.simTime = 0;
   state.shipTime = 0;
   ship.heat = 0;
+  finaleChoiceShown = false;
+  finaleMode = 'none';
+  finaleEscapeT = 0;
+  fadeEl.style.opacity = '0';
+  removeDerelict();
+  if (mission.special === 'derelict') spawnDerelict();
   mission.setup(ctx);
   markers.set(activeWaypoints);
   markers.setVisible(true);
@@ -361,6 +545,7 @@ function completeMission() {
   const mission = MISSIONS[missionIndex];
   saveProgress(missionIndex + 1);
   state.paused = true;
+  removeDerelict();
   const next = missionIndex + 1;
   ui.showComplete(
     mission.title,
@@ -375,6 +560,7 @@ function completeMission() {
 
 function failMission(reason: string) {
   state.paused = true;
+  removeDerelict();
   ui.showFail(reason, () => launchMission(missionIndex));
 }
 
@@ -403,6 +589,11 @@ showMenuMode();
 // —— 键盘动作 ——
 const CAM_NAMES = ['追尾', '座舱', '自由'];
 window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyP') {
+    if (state.mode === 'flight') enterPhotoMode();
+    else if (state.mode === 'photo') exitPhotoMode();
+    return;
+  }
   if (state.mode !== 'flight') return;
   if (e.code === 'KeyZ') {
     const idx = WARP_STEPS.indexOf(state.warp);
@@ -498,6 +689,9 @@ function updateCamera(dt: number) {
   get obj() {
     return objectiveIdx;
   },
+  get derelictPos() {
+    return derelict ? derelict.pos.toArray() : null;
+  },
   launchMission: (i: number) => launchMission(i),
   startFree: () => launchFreeFlight(),
   // 将飞船姿态对准给定方向（默认沿速度方向）
@@ -516,6 +710,13 @@ function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
   frame++;
 
+  if (state.mode === 'photo') {
+    controls.update();
+    bhUniforms.uTime.value += dt;
+    renderPipeline();
+    return;
+  }
+
   updateAttitude(dt);
 
   // 推进方向：手动输入 or 自动刹车
@@ -531,6 +732,14 @@ function tick() {
       state.autoBrake = false;
       hud.toast('速度已归零，自动刹车关闭', 1600);
     }
+  }
+  if (finaleMode === 'fall') thrustDir.set(0, 0, 0);
+  if (finaleMode === 'escape' && finaleEscapeT < 3) {
+    // 脚本化返航点火：PW 势在近场所需的 Δv 超光速，用持续推力保证脱离
+    finaleEscapeT += dt * state.warp;
+    ship.vel.addScaledVector(tmpDir.copy(ship.pos).normalize(), 0.3 * dt * state.warp);
+    ship.throttle = 1;
+    shipVisual.setThrottle(1);
   }
   const throttle = thrustDir.lengthSq() > 0 ? 1 : 0;
   ship.throttle += (throttle - ship.throttle) * (1 - Math.exp(-dt * 12));
@@ -549,14 +758,14 @@ function tick() {
     const dil = dilation(ship.pos.length(), ship.vel.length());
     state.simTime += dtSim;
     state.shipTime += dtSim * dil;
-    updateHeat(dtSim);
+    if (finaleMode === 'none') updateHeat(dtSim); // 终章 scripted 航段免于过热
 
     // 坠洞 / 过热
-    if (res.crashed) {
+    if (res.crashed && finaleMode !== 'fall') {
       ship.alive = false;
       if (missionIndex >= 0) failMission('飞船越过事件视界，信号终止于无限红移。');
       else hud.toast('你越过了事件视界 — 按 R 重生', 8000);
-    } else if (ship.heat >= 100) {
+    } else if (ship.heat >= 100 && finaleMode !== 'fall') {
       ship.alive = false;
       if (missionIndex >= 0) failMission('船体过热，结构解体。下次离盘面远一点。');
       else hud.toast('船体过热解体 — 按 R 重生', 8000);
@@ -596,6 +805,8 @@ function tick() {
         setObjectiveHud();
       }
     }
+    updateDerelict(dt * state.warp);
+    updateFinale();
     markers.update(camera, bhUniforms.uTime.value);
   }
 
@@ -621,17 +832,80 @@ function tick() {
 
   if (state.hudVisible) hud.update(state, ship, camera);
 
-  // 黑洞背景渲染
+  bhUniforms.uTime.value += dt;
+  bhUniforms.uBeaming.value = params.beaming;
+  renderPipeline();
+}
+
+// —— 摄影模式 ——
+const photoEls: HTMLElement[] = [];
+function photoButton(label: string, onClick: () => void): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText =
+    'appearance:none;background:rgba(20,16,12,0.7);border:1px solid rgba(255,200,140,0.5);border-radius:3px;color:#ffe0b9;font-size:13px;letter-spacing:0.25em;padding:8px 20px;cursor:pointer;pointer-events:auto;';
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function enterPhotoMode() {
+  state.mode = 'photo';
+  state.paused = true;
+  hud.setVisible(false);
+  markers.setVisible(false);
+  controls.enabled = true;
+  controls.target.copy(ship.pos);
+  const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(ship.quat);
+  camera.position.copy(ship.pos).addScaledVector(dir, -4).add(new THREE.Vector3(0, 1.2, 0));
+
+  const top = document.createElement('div');
+  top.style.cssText = 'position:fixed;top:0;left:0;right:0;height:9vh;background:#000;z-index:25;';
+  const bottom = document.createElement('div');
+  bottom.style.cssText = 'position:fixed;bottom:0;left:0;right:0;height:9vh;background:#000;z-index:25;';
+  const bar = document.createElement('div');
+  bar.style.cssText =
+    'position:fixed;bottom:11vh;left:50%;transform:translateX(-50%);display:flex;gap:12px;z-index:26;';
+  bar.append(photoButton('◉ 拍摄', takePhoto), photoButton('退出摄影模式 (P)', exitPhotoMode));
+  document.body.append(top, bottom, bar);
+  photoEls.push(top, bottom, bar);
+}
+
+function exitPhotoMode() {
+  state.mode = 'flight';
+  state.paused = false;
+  hud.setVisible(state.hudVisible);
+  markers.setVisible(missionIndex >= 0);
+  controls.enabled = state.cameraMode === 2;
+  for (const el of photoEls) el.remove();
+  photoEls.length = 0;
+}
+
+function takePhoto() {
+  renderPipeline();
+  renderer.domElement.toBlob((blob) => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `event-horizon-${Date.now()}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    hud.toast('照片已保存', 2000);
+    hud.setVisible(false);
+  });
+}
+
+renderPipeline();
+tick();
+
+function renderPipeline() {
   camera.updateMatrixWorld();
   bhUniforms.uCamWorld.value.copy(camera.matrixWorld);
   bhUniforms.uCamPos.value.copy(camera.position);
   bhUniforms.uProjInv.value.copy(camera.projectionMatrixInverse);
-  bhUniforms.uTime.value += dt;
-  bhUniforms.uBeaming.value = params.beaming;
-
   renderer.setRenderTarget(rt);
   renderer.render(bhScene, orthoCam);
   renderer.setRenderTarget(null);
   composer.render();
 }
+renderPipeline();
 tick();

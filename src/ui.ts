@@ -129,6 +129,32 @@ export class Ui {
     this.modal.style.display = '';
   }
 
+  showChoice(title: string, lines: string[], options: { label: string; primary?: boolean; cb: () => void }[]) {
+    this.hideAll();
+    const h = this.modal.querySelector('h2') as HTMLElement;
+    const body = this.modal.querySelector('.eh-modal-body') as HTMLElement;
+    const btns = this.modal.querySelector('.eh-modal-btns') as HTMLElement;
+    h.textContent = title;
+    body.innerHTML = lines.map((l) => `<p>${l}</p>`).join('');
+    btns.innerHTML = '';
+    for (const opt of options) {
+      btns.appendChild(this.button(opt.label, !!opt.primary, opt.cb));
+    }
+    this.modal.style.display = '';
+  }
+
+  showEnding(title: string, lines: string[]) {
+    this.hideAll();
+    const h = this.modal.querySelector('h2') as HTMLElement;
+    const body = this.modal.querySelector('.eh-modal-body') as HTMLElement;
+    const btns = this.modal.querySelector('.eh-modal-btns') as HTMLElement;
+    h.textContent = title;
+    body.innerHTML = lines.map((l) => `<p>${l}</p>`).join('');
+    btns.innerHTML = '';
+    btns.appendChild(this.button('返回主菜单', true, () => this.showMenu(savedProgress())));
+    this.modal.style.display = '';
+  }
+
   hideAll() {
     this.menu.style.display = 'none';
     this.modal.style.display = 'none';

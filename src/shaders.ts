@@ -33,6 +33,13 @@ uniform float uOmega;
 uniform float uFlowPeriod;
 uniform float uPixelAngle;
 uniform vec3 uMwNormal;
+uniform float uJet;
+uniform float uStream;
+
+// TDE 碎屑流平面（倾斜于吸积盘）
+const vec3 NS = normalize(vec3(0.52, 0.72, 0.6));
+const vec3 SE1 = normalize(cross(NS, vec3(0.0, 0.0, 1.0)));
+const vec3 SE2 = cross(NS, SE1);
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -237,6 +244,48 @@ void main() {
         col += dc.rgb * dc.a * trans;
         trans *= (1.0 - dc.a);
         if (trans < 0.02) break;
+      }
+    }
+
+    // 相对论喷流：沿 ±y 轴的锥形外流，β=0.9，多普勒增亮 + 湍流结节
+    float ay = abs(pos.y);
+    if (uJet > 0.001 && ay > 0.4 && ay < 30.0) {
+      float rj = 0.10 + 0.085 * ay;
+      float dj = length(pos.xz);
+      if (dj < rj) {
+        float kn = vnoise3(vec3(pos.x * 2.2, pos.y * 0.55 - sign(pos.y) * uTime * 1.4, pos.z * 2.2));
+        float dens = pow(1.0 - dj / rj, 0.6) * (0.35 + 0.75 * kn);
+        vec3 vhat = vec3(0.0, sign(pos.y), 0.0);
+        vec3 pd = -normalize(dir);
+        float betaJ = 0.9;
+        float dop = sqrt(1.0 - betaJ * betaJ) / (1.0 - betaJ * dot(vhat, pd));
+        dop = mix(1.0, dop, uBeaming);
+        vec3 jcol = vec3(0.62, 0.72, 1.0);
+        col += jcol * (dens * pow(dop, 2.0) * 0.16 * uJet) * dt * trans;
+      }
+    }
+
+    // TDE 碎屑流：倾斜平面上的蓝白发光带
+    if (uStream > 0.001) {
+      float s0 = dot(prev, NS);
+      float s1 = dot(pos, NS);
+      if (s0 * s1 < 0.0) {
+        float t2 = s0 / (s0 - s1);
+        vec3 hit2 = mix(prev, pos, t2);
+        float rs = length(hit2);
+        if (rs > 2.6 && rs < 15.0) {
+          vec2 q = vec2(dot(hit2, SE1), dot(hit2, SE2));
+          float ca = cos(uTime * 0.05);
+          float sa = sin(uTime * 0.05);
+          q = vec2(q.x * ca + q.y * sa, -q.x * sa + q.y * ca);
+          float n = fbm2(q * 1.1 + vec2(7.7, 2.2));
+          float band = smoothstep(2.6, 3.6, rs) * (1.0 - smoothstep(9.0, 14.0, rs));
+          float dens = pow(max(n, 0.0), 2.4) * band;
+          float alpha = clamp(dens * 1.5, 0.0, 1.0) * 0.7;
+          vec3 emit = blackbody(8200.0) * dens * uExposure * 0.65;
+          col += emit * alpha * trans;
+          trans *= (1.0 - alpha);
+        }
       }
     }
   }
