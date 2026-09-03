@@ -497,6 +497,7 @@ interface CompanionRuntime {
 }
 let companion: CompanionRuntime | null = null;
 let rocheStream: THREE.Mesh | null = null;
+let rocheStreamSys: StarSystem | null = null;
 
 function starSurfaceMaterial(tempK: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
@@ -569,10 +570,10 @@ function spawnCompanion(sys: StarSystem) {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.4,
     }),
   );
-  corona.scale.set(c.radius * 6, c.radius * 6, 1);
+  corona.scale.set(c.radius * 4.2, c.radius * 4.2, 1);
   group.add(corona);
   compScene.add(group);
 
@@ -640,6 +641,7 @@ function spawnCompanion(sys: StarSystem) {
   );
   compScene.add(tube);
   rocheStream = tube;
+  rocheStreamSys = sys;
 }
 
 function removeCompanion() {
@@ -663,8 +665,26 @@ function updateCompanion(dtSim: number) {
   companion.group.position.copy(tmpV3);
   const mat = (companion.group.children[0] as THREE.Mesh).material as THREE.ShaderMaterial;
   mat.uniforms.uTime.value += dtSim;
-  if (rocheStream) {
+  if (rocheStream && rocheStreamSys) {
     (rocheStream.material as THREE.ShaderMaterial).uniforms.uTime.value += dtSim;
+    // 参数化内旋螺旋：始终从伴星当前位置旋入吸积盘外缘（任意轨道相位都物理连贯）
+    const comp = rocheStreamSys.companion!;
+    const a0 = Math.atan2(tmpV3.z, tmpV3.x);
+    const r0 = Math.hypot(tmpV3.x, tmpV3.z);
+    const y0 = tmpV3.y;
+    const rIn = rocheStreamSys.disk.outer - 0.4;
+    const ctrl: THREE.Vector3[] = [];
+    for (let i = 0; i <= 6; i++) {
+      const t = i / 6;
+      const ease = t * t * (3 - 2 * t);
+      const ang = a0 - ease * 1.35; // 内旋 1.35 rad
+      const rad = r0 + (rIn - r0) * ease;
+      ctrl.push(new THREE.Vector3(Math.cos(ang) * rad, y0 + (0.05 - y0) * ease, Math.sin(ang) * rad));
+    }
+    const curve = new THREE.CatmullRomCurve3(ctrl);
+    const oldGeo = rocheStream.geometry;
+    rocheStream.geometry = new THREE.TubeGeometry(curve, 110, 0.3, 6, false);
+    oldGeo.dispose();
   }
   // 标签
   const d = ship.pos.distanceTo(companion.pos);

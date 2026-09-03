@@ -203,7 +203,13 @@ void main() {
     if (r < 1.0) break;
     if (r > 60.0 && dot(pos, dir) > 0.0) { escaped = true; break; }
 
-    float dt = clamp(r * 0.11, 0.02, 1.0);
+    // 远场大步长（r>30 曲率可忽略，快速收敛到近场），近场保持精细积分
+    float dt;
+    if (r > 30.0) {
+      dt = min((r - 28.0) * 0.6, 80.0);
+    } else {
+      dt = clamp(r * 0.11, 0.02, 1.0);
+    }
     vec3 acc = (-1.5 * h2 / (r2 * r2 * r)) * pos;
     vec3 prev = pos;
     dir += acc * dt;
