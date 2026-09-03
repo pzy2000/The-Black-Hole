@@ -11,6 +11,7 @@ import { createShipVisual, integrateShip, OrbitPredictor } from './ship';
 import { appendUiStyles, Ui, savedProgress, saveProgress } from './ui';
 import { Markers } from './markers';
 import { MISSIONS, type MissionCtx, type MissionFx, type MissionWaypoint } from './missions';
+import { buildSky, dirToEquirect, starLabel, type NamedStar } from './sky';
 import {
   gravityAccel,
   initialShip,
@@ -49,6 +50,17 @@ try {
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+// 天球纹理（HYG 星表烘焙目标）：与主 RT 同一模式——先创建并绑定，后异步填充
+const skyRt = new THREE.WebGLRenderTarget(4096, 2048, {
+  type: THREE.HalfFloatType,
+  depthBuffer: false,
+  stencilBuffer: false,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  wrapS: THREE.RepeatWrapping,
+  wrapT: THREE.ClampToEdgeWrapping,
+});
 
 const QUALITY = {
   low: { resScale: 0.45, steps: 180 },
@@ -114,8 +126,8 @@ const bhUniforms = {
   uExposure: { value: 1.8 },
   uOmega: { value: 1.1 },
   uFlowPeriod: { value: 26.0 },
-  uPixelAngle: { value: 0.001 },
-  uMwNormal: { value: new THREE.Vector3(0.45, 0.8, 0.35).normalize() },
+  uSkyTex: { value: skyRt.texture },
+  uSkyRot: { value: new THREE.Matrix3() },
   uJet: { value: 1.0 },
   uStream: { value: 1.0 },
 };
@@ -154,6 +166,18 @@ const predictor = new OrbitPredictor();
 compScene.add(predictor.line);
 
 const compUniforms = { uTex: { value: rt.texture } };
+const compMat = new THREE.ShaderMaterial({
+  glslVersion: THREE.GLSL3,
+  uniforms: compUniforms,
+  vertexShader: fullscreenVertex,
+  fragmentShader: compositeFragment,
+  depthTest: false,
+  depthWrite: false,
+});
+const compQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), compMat);
+compQuad.frustumCulled = false;
+compScene.add(compQuad);
+
 const composer = new EffectComposer(
   renderer,
   new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType }),
@@ -179,7 +203,6 @@ function resize() {
   composer.setSize(w * dpr, h * dpr);
   bloom.setSize(w * dpr, h * dpr);
   bhUniforms.uMaxSteps.value = q.steps;
-  bhUniforms.uPixelAngle.value = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / rh;
 }
 window.addEventListener('resize', resize);
 resize();
@@ -578,6 +601,68 @@ function updateHeat(dtSim: number) {
   if (ship.heat < 55) heatWarned = false;
 }
 
+// —— 真实星空（HYG 星表烘焙）与星图模式 ——
+const namedStars: NamedStar[] = [];
+const labelPool: HTMLElement[] = [];
+const labelDirs: THREE.Vector3[] = [];
+let starMapOn = false;
+const starMapLines = new THREE.LineSegments(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.55 }),
+);
+starMapLines.visible = false;
+starMapLines.frustumCulled = false;
+compScene.add(starMapLines);
+
+const starLabelBox = document.createElement('div');
+starLabelBox.id = 'eh-starlabels';
+starLabelBox.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:11;display:none;';
+document.body.appendChild(starLabelBox);
+
+initSky();
+async function initSky() {
+  try {
+    const sky = await buildSky(renderer, skyRt);
+    bhUniforms.uSkyTex.value = sky.texture;
+    namedStars.push(...sky.namedStars);
+
+    // 星座连线（半径 100 的天球，过同一天空旋转）
+    const verts: number[] = [];
+    const v1 = new THREE.Vector3();
+    for (const c of sky.constellations) {
+      for (let i = 0; i < c.stars.length; i += 2) {
+        v1.copy(c.stars[i].dir).applyMatrix3(bhUniforms.uSkyRot.value).multiplyScalar(100);
+        verts.push(v1.x, v1.y, v1.z);
+        v1.copy(c.stars[i + 1].dir).applyMatrix3(bhUniforms.uSkyRot.value).multiplyScalar(100);
+        verts.push(v1.x, v1.y, v1.z);
+      }
+    }
+    starMapLines.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+
+    // 标签池（亮星 mag ≤ 2.6）
+    const bright = sky.namedStars.filter((st) => st.mag <= 2.6).slice(0, 44);
+    for (const st of bright) {
+      const el = document.createElement('div');
+      el.className = 'eh-starlabel';
+      el.textContent = starLabel(st);
+      el.style.display = 'none';
+      starLabelBox.appendChild(el);
+      labelPool.push(el);
+      labelDirs.push(st.dir.clone());
+    }
+    console.log(`[天空] 真实星表加载完成: ${sky.starCount} 颗恒星`);
+  } catch (e) {
+    console.error('星空烘焙失败，保留纯黑天空', e);
+  }
+}
+
+function toggleStarMap() {
+  starMapOn = !starMapOn;
+  starMapLines.visible = starMapOn && starMapLines.geometry.getAttribute('position') !== undefined;
+  starLabelBox.style.display = starMapOn ? '' : 'none';
+  hud.toast(starMapOn ? '星图模式 · 开' : '星图模式 · 关', 1400);
+}
+
 const ui = new Ui({
   onStartMission: (i) => ui.showBrief(MISSIONS[i].title, MISSIONS[i].brief, () => launchMission(i)),
   onFreeFlight: launchFreeFlight,
@@ -615,6 +700,8 @@ window.addEventListener('keydown', (e) => {
   } else if (e.code === 'KeyH') {
     state.hudVisible = !state.hudVisible;
     hud.setVisible(state.hudVisible);
+  } else if (e.code === 'KeyM') {
+    toggleStarMap();
   } else if (e.code === 'KeyT' && missionIndex >= 0) {
     MISSIONS[missionIndex].onKey?.(e.code, ctx);
   }
@@ -829,6 +916,22 @@ function tick() {
   updateCamera(dt);
 
   if (frame % 3 === 0) predictor.update(ship.pos, ship.vel);
+
+  if (starMapOn) {
+    const p = new THREE.Vector3();
+    for (let i = 0; i < labelPool.length; i++) {
+      const el = labelPool[i];
+      p.copy(labelDirs[i]).applyMatrix3(bhUniforms.uSkyRot.value).multiplyScalar(100);
+      const proj = p.project(camera);
+      const behind = proj.z > 1;
+      const x = (proj.x * 0.5 + 0.5) * window.innerWidth;
+      const y = (-proj.y * 0.5 + 0.5) * window.innerHeight;
+      const off = behind || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight;
+      el.style.display = off ? 'none' : '';
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+    }
+  }
 
   if (state.hudVisible) hud.update(state, ship, camera);
 

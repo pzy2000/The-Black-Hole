@@ -2,7 +2,7 @@
 // 单位约定：史瓦西半径 Rs = 1（视界 r=1，光子球 r=1.5，ISCO r=3）
 // 光线从相机出发，在史瓦西时空中沿零测地线数值积分：
 //   d²x/dλ² = -1.5 · h² · x / r⁵   （h = |x × dx/dλ| 守恒）
-// 命中视界 → 黑；穿越赤道面且 r 落在盘范围内 → 采样吸积盘；逃逸 → 程序星空。
+// 命中视界 → 黑；穿越赤道面且 r 落在盘范围内 → 采样吸积盘；逃逸 → 真实星表天球。
 
 export const fullscreenVertex = /* glsl */ `
 varying vec2 vUv;
@@ -31,8 +31,8 @@ uniform float uBeaming;
 uniform float uExposure;
 uniform float uOmega;
 uniform float uFlowPeriod;
-uniform float uPixelAngle;
-uniform vec3 uMwNormal;
+uniform sampler2D uSkyTex;
+uniform mat3 uSkyRot;
 uniform float uJet;
 uniform float uStream;
 
@@ -173,39 +173,12 @@ vec4 shadeDisk(vec3 hit, vec3 marchDir) {
   return vec4(emit, alpha);
 }
 
-// 程序星空：多层网格哈希恒星（按黑体色温着色）+ 银河带
-vec3 starLayer(vec3 d, float scale, float density, float glowScale) {
-  vec3 p = d * scale;
-  vec3 id = floor(p);
-  float sr = hash13(id + 7.7);
-  if (sr > density) return vec3(0.0);
-  vec3 h = hash33(id);
-  vec3 f = fract(p);
-  vec3 sp = 0.2 + 0.6 * h;
-  float dist = length(f - sp);
-  float px = uPixelAngle * scale;
-  float size = mix(0.03, 0.13, pow(h.y, 7.0));
-  float sigma = max(size, px * 0.5);
-  float bright = pow(h.z, 12.0) * 3.0 + 0.02;
-  float amp = exp(-dist * dist / (2.0 * sigma * sigma)) * bright;
-  float tK = mix(2600.0, 11000.0, pow(h.x, 1.6));
-  return blackbody(tK) * amp * glowScale;
-}
-
+// 真实星空：HYG 星表（约 10 万颗）离线烘焙的天球纹理，被引力透镜实时采样
 vec3 starField(vec3 d) {
-  vec3 c = vec3(0.0);
-  c += starLayer(d, 42.0, 0.32, 0.55);
-  c += starLayer(d, 90.0, 0.26, 0.38);
-  c += starLayer(d, 170.0, 0.2, 0.26);
-  float band = dot(d, uMwNormal);
-  float mw = exp(-band * band * 26.0);
-  float cl = fbm3(d * 4.5 + vec3(9.2, 1.7, 4.4));
-  float dust = fbm3(d * 8.0 - vec3(5.0, 3.0, 8.0));
-  vec3 mwCol = mix(vec3(0.45, 0.6, 1.0), vec3(1.0, 0.85, 0.65), cl);
-  float lanes = 1.0 - 0.75 * smoothstep(0.35, 0.75, dust) * mw;
-  c += mwCol * (mw * (0.035 + 0.14 * cl) * lanes);
-  c += vec3(0.001, 0.0015, 0.003);
-  return c;
+  vec3 ds = uSkyRot * d;
+  float u = atan(ds.z, ds.x) / 6.28318530718 + 0.5;
+  float v = asin(clamp(ds.y, -1.0, 1.0)) / 3.14159265359 + 0.5;
+  return texture2D(uSkyTex, vec2(u, v)).rgb * 2.5 + vec3(0.001, 0.0015, 0.003);
 }
 
 void main() {

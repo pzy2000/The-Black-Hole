@@ -99,3 +99,13 @@ footer {
   letter-spacing: 0.28em;
   color: var(--fg-dim);
 }
+
+.eh-starlabel {
+  position: absolute;
+  transform: translate(-50%, -150%);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  color: rgba(160, 214, 255, 0.92);
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.95);
+}
