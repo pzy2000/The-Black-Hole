@@ -18,7 +18,7 @@ export interface ShipState {
 }
 
 export interface GameState {
-  mode: 'flight' | 'photo';
+  mode: 'menu' | 'flight' | 'photo';
   paused: boolean;
   simTime: number; // 地球坐标时
   shipTime: number; // 船内固有时
@@ -68,7 +68,8 @@ export function initialShip(): ShipState {
   const tangent = new THREE.Vector3(-pos.z, 0, pos.x).normalize();
   const vel = tangent.multiplyScalar(circularSpeed(pos.length()));
   const quat = new THREE.Quaternion().setFromRotationMatrix(
-    new THREE.Matrix4().lookAt(new THREE.Vector3(), vel, new THREE.Vector3(0, 1, 0)),
+    // eye=vel 使 +Z（船首）对准速度方向
+    new THREE.Matrix4().lookAt(vel, new THREE.Vector3(), new THREE.Vector3(0, 1, 0)),
   );
   return { pos, vel, quat, fuel: FUEL_MAX, heat: 0, alive: true, throttle: 0 };
 }
