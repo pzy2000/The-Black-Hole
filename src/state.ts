@@ -23,7 +23,7 @@ export interface GameState {
   simTime: number; // 地球坐标时
   shipTime: number; // 船内固有时
   warp: number;
-  cameraMode: 0 | 1 | 2; // 追尾 / 座舱 / 自由
+  cameraMode: 0 | 1 | 2 | 3; // 追尾 / 座舱 / 自由 / 朝向黑洞
   hudVisible: boolean;
   autoBrake: boolean;
 }

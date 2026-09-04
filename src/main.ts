@@ -988,7 +988,7 @@ function toggleStarMap() {
 }
 
 // —— EHT 视角：科学渲染参数 + 广角定机位（模拟地球观测几何） ——
-let ehtSaved: { beaming: number; exposure: number; camPos: THREE.Vector3; quat: THREE.Quaternion; camMode: 0 | 1 | 2 } | null = null;
+let ehtSaved: { beaming: number; exposure: number; camPos: THREE.Vector3; quat: THREE.Quaternion; camMode: 0 | 1 | 2 | 3 } | null = null;
 function toggleEhtView() {
   if (!ehtSaved) {
     ehtSaved = {
@@ -1061,7 +1061,7 @@ function refreshDexCards() {
 showMenuMode();
 
 // —— 键盘动作 ——
-const CAM_NAMES = ['追尾', '座舱', '自由'];
+const CAM_NAMES = ['追尾', '座舱', '自由', '朝向黑洞'];
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyP') {
     if (state.mode === 'flight') enterPhotoMode();
@@ -1075,7 +1075,7 @@ window.addEventListener('keydown', (e) => {
     flags.add('warp');
     hud.toast(`时间 ×${state.warp}`, 1200);
   } else if (e.code === 'KeyC') {
-    state.cameraMode = ((state.cameraMode + 1) % 3) as 0 | 1 | 2;
+    state.cameraMode = ((state.cameraMode + 1) % 4) as 0 | 1 | 2 | 3;
     controls.enabled = state.cameraMode === 2;
     if (state.cameraMode === 2) {
       controls.target.copy(ship.pos);
@@ -1143,6 +1143,15 @@ function updateCamera(dt: number) {
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(ship.quat);
     camera.position.copy(ship.pos).addScaledVector(forward, 0.25).addScaledVector(up, 0.1);
     camera.quaternion.copy(ship.quat);
+  } else if (state.cameraMode === 3) {
+    // 朝向黑洞：追尾式跟随位置，但视线始终锁定黑洞（原点），船体朝向独立
+    const back = forward.clone().multiplyScalar(-2.6);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(ship.quat);
+    camTargetPos.copy(ship.pos).add(back).addScaledVector(up, 0.9);
+    const k = 1 - Math.exp(-dt * 10);
+    camera.position.lerp(camTargetPos, k);
+    camera.up.copy(up);
+    camera.lookAt(0, 0, 0);
   } else {
     controls.target.lerp(ship.pos, 1 - Math.exp(-dt * 6));
     controls.update();
