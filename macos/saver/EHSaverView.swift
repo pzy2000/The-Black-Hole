@@ -7,6 +7,7 @@ import WebKit
 @objc(EHSaverView)
 public final class EHSaverView: ScreenSaverView {
   private var web: WKWebView?
+  private var lifecycleObservers: [NSObjectProtocol] = []
   private static let startURL = URL(string: "eh://local/index.html?cinema=1")!
 
   public override init?(frame: NSRect, isPreview: Bool) {
@@ -22,6 +23,21 @@ public final class EHSaverView: ScreenSaverView {
   private func commonInit() {
     wantsLayer = true
     layer?.backgroundColor = NSColor.black.cgColor
+    // 休眠/唤醒期间 WKWebView 的 GPU 管线与 WindowServer 重配置相互作用
+    // 会损坏宿主进程（macOS 26 可稳定复现），休眠前摘除、唤醒后重载
+    let center = NSWorkspace.shared.notificationCenter
+    lifecycleObservers.append(center.addObserver(
+      forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main
+    ) { [weak self] _ in self?.detachWeb() })
+    lifecycleObservers.append(center.addObserver(
+      forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
+    ) { [weak self] _ in self?.ensureWebView() })
+  }
+
+  deinit {
+    for token in lifecycleObservers {
+      NSWorkspace.shared.notificationCenter.removeObserver(token)
+    }
   }
 
   public override func startAnimation() {
@@ -31,6 +47,11 @@ public final class EHSaverView: ScreenSaverView {
 
   public override func stopAnimation() {
     super.stopAnimation()
+    detachWeb()
+  }
+
+  private func detachWeb() {
+    web?.stopLoading()
     web?.removeFromSuperview()
     web = nil
   }
