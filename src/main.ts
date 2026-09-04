@@ -1196,6 +1196,7 @@ const thrustDir = new THREE.Vector3();
 const tmpDir = new THREE.Vector3();
 let frame = 0;
 function stepSimulation(dt: number) {
+  if (state.mode !== 'flight') return;
   frame++;
 
   updateAttitude(dt);
@@ -1319,6 +1320,8 @@ function tick() {
     renderPipeline();
     return;
   }
+
+  stepSimulation(dt);
 
   shipVisual.group.position.copy(ship.pos);
   shipVisual.group.quaternion.copy(ship.quat);
