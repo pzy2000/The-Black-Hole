@@ -1189,6 +1189,9 @@ function updateCamera(dt: number) {
   get derelictPos() {
     return derelict ? derelict.pos.toArray() : null;
   },
+  get predictorLine() {
+    return predictor.line;
+  },
   launchMission: (i: number) => launchMission(i),
   startFree: () => launchFreeFlight(),
   // 手动驱动模拟（自动化测试用，与 rAF 兼容）
