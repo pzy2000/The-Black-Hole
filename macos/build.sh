@@ -15,11 +15,21 @@ APP="$BUILD/事件视界壁纸.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp macos/wallpaper/Info.plist "$APP/Contents/Info.plist"
 swiftc -O -swift-version 5 \
+  macos/common/CineSettings.swift \
   macos/common/SchemeHandler.swift \
+  macos/common/SettingsUI.swift \
   macos/wallpaper/main.swift \
   -o "$APP/Contents/MacOS/EventHorizonWallpaper" \
-  -framework AppKit -framework WebKit -framework ServiceManagement
-cp -R dist "$APP/Contents/Resources/web"
+  -framework AppKit -framework WebKit -framework ServiceManagement -framework SwiftUI
+copy_web() {
+  cp -R dist "$1/Contents/Resources/web"
+  # BGM：assets/bgms 自动扫描目录 → 包内 Resources/web/bgms（网页端 eh://local/bgms/ 读取）
+  if [ -d assets/bgms ] && [ -n "$(ls -A assets/bgms 2>/dev/null)" ]; then
+    mkdir -p "$1/Contents/Resources/web/bgms"
+    cp assets/bgms/* "$1/Contents/Resources/web/bgms/"
+  fi
+}
+copy_web "$APP"
 codesign --force --sign - "$APP"
 echo "✓ $APP"
 
@@ -29,18 +39,20 @@ mkdir -p "$SAVER/Contents/MacOS" "$SAVER/Contents/Resources"
 cp macos/saver/Info.plist "$SAVER/Contents/Info.plist"
 # 屏保可执行文件是 MH_BUNDLE；swiftc 不直接支持 -bundle，用 -Xlinker 透传
 if ! swiftc -O -swift-version 5 -parse-as-library \
-    macos/common/SchemeHandler.swift macos/saver/EHSaverView.swift \
+    macos/common/CineSettings.swift macos/common/SchemeHandler.swift macos/common/SettingsUI.swift \
+    macos/saver/EHSaverView.swift \
     -emit-library -Xlinker -bundle \
     -o "$SAVER/Contents/MacOS/EventHorizon" \
-    -framework AppKit -framework WebKit -framework ScreenSaver 2>/dev/null; then
+    -framework AppKit -framework WebKit -framework ScreenSaver -framework SwiftUI 2>/dev/null; then
   echo "  (-bundle 链接失败，退回 dylib)"
   swiftc -O -swift-version 5 -parse-as-library \
-    macos/common/SchemeHandler.swift macos/saver/EHSaverView.swift \
+    macos/common/CineSettings.swift macos/common/SchemeHandler.swift macos/common/SettingsUI.swift \
+    macos/saver/EHSaverView.swift \
     -emit-library \
     -o "$SAVER/Contents/MacOS/EventHorizon" \
-    -framework AppKit -framework WebKit -framework ScreenSaver
+    -framework AppKit -framework WebKit -framework ScreenSaver -framework SwiftUI
 fi
-cp -R dist "$SAVER/Contents/Resources/web"
+copy_web "$SAVER"
 codesign --force --sign - "$SAVER"
 echo "✓ $SAVER"
 

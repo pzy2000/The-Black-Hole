@@ -9,6 +9,7 @@ import { appendHudStyles, Hud } from './hud';
 import { Input } from './input';
 import { createShipVisual, integrateShip, OrbitPredictor } from './ship';
 import { appendUiStyles, Ui, savedProgress, saveProgress } from './ui';
+import { CinemaBgm, loadCinemaSettings, sanitizeCinemaSettings, type CinemaSettings } from './cinema';
 import { Markers } from './markers';
 import { MISSIONS, type MissionCtx, type MissionFx, type MissionWaypoint } from './missions';
 import { SYSTEMS, systemByMission, companionPos, type StarSystem } from './systems';
@@ -82,6 +83,18 @@ const params = {
 // —— 影院模式（?cinema=1）：桌面壁纸 / 屏幕保护专用 ——
 // 锁定「朝向黑洞」机位 + 时间×10 + 飞船匀速圆周轨道（解析驱动，永不坠落） + 无 UI
 const cinemaMode = new URLSearchParams(location.search).has('cinema');
+
+// —— 影院宿主设置（壁纸 App / 屏保设置窗口写入，缺省 = 不限帧率 + 超高画质） ——
+let cineSettings: CinemaSettings = sanitizeCinemaSettings(null);
+let cineQualityAuto = false; // quality === 'auto' 时才允许帧率不足自动降级
+let cinemaPaused = false; // 宿主失焦「暂停渲染」
+let cinemaMutedExternal = false; // 宿主失焦「静音」
+let cineFpsBudget = 0; // 帧率上限的帧时长累积器
+// 多屏壁纸/多实例屏保只有第一路出声，其余静默渲染
+const cinemaAudioMaster = new URLSearchParams(location.search).get('audio') !== '0';
+const cinemaBgm = new CinemaBgm(() => cineSettings, cinemaAudioMaster, () => cinemaPaused);
+if (cinemaMode) void cinemaBgm.init();
+
 let skyOk = false;
 
 // —— 游戏状态 ——
@@ -1214,9 +1227,14 @@ function updateCamera(dt: number) {
       cam: state.cameraMode,
       quality: params.quality,
       fps: cineFpsNow,
+      fpsCap: cineSettings.maxFps,
+      paused: cinemaPaused,
+      muted: cinemaMutedExternal,
       skyOk,
       hudVisible: state.hudVisible,
       menuVisible: ui.anyVisible,
+      bgm: cinemaBgm.status,
+      settings: cineSettings,
     };
   },
   get predictorLine() {
@@ -1267,11 +1285,16 @@ function stepCinema(dt: number) {
 }
 
 // 起播 8s 预热后监测帧率，连续不足则逐级降画质（ultra→high→medium），保证壁纸流畅
-// 用挂钟计帧（rAF 节流/冻结时 dt 累计会失真）
+// 用挂钟计帧（rAF 节流/冻结时 dt 累计会失真）。画质被用户显式指定时不降级。
 function cinemaFpsGuard() {
   const now = performance.now();
   if (cineFpsMark === 0) {
     cineFpsMark = now;
+    return;
+  }
+  if (cinemaPaused) {
+    cineFpsMark = now; // 冻结期间不计帧
+    cineFpsFrames = 0;
     return;
   }
   cineFpsFrames++;
@@ -1286,7 +1309,9 @@ function cinemaFpsGuard() {
     return;
   }
   cineFpsNow = fps;
-  if (fps < 26 && cineDrops < 2) {
+  // 有帧率上限时按上限的 85% 判定"不足"
+  const fpsFloor = cineSettings.maxFps > 0 ? cineSettings.maxFps * 0.85 : 26;
+  if (fps < fpsFloor && cineQualityAuto && cineDrops < 2) {
     cineDrops++;
     const ladder: QualityKey[] = ['ultra', 'high', 'medium'];
     params.quality = ladder[cineDrops];
@@ -1316,9 +1341,60 @@ function launchCinema() {
   document.getElementById('ui')?.remove();
   errBox.remove();
   document.title = '事件视界 · 影院';
-  params.quality = 'ultra';
+  params.quality = 'ultra'; // 启动先按最高画质起播，宿主设置加载后按设置覆盖
   resize();
+  void loadCinemaSettings().then((s) => applyCinemaSettings(s));
 }
+
+/** 应用宿主设置（启动加载 + 设置窗口活体下发共用） */
+function applyCinemaSettings(next: CinemaSettings) {
+  cineSettings = next;
+  cineQualityAuto = next.quality === 'auto';
+  const q: QualityKey = cineQualityAuto ? 'ultra' : (next.quality as QualityKey);
+  if (params.quality !== q) {
+    params.quality = q;
+    resize();
+  }
+  cinemaBgm.refresh();
+}
+
+// —— 宿主命令桥：壁纸 App / 屏保失焦时下发 ——
+// 创建 WebView 时若已处于失焦状态，宿主还会用 ?paused=1 / ?muted=1 下发初始态
+const ehCinema = {
+  pause() {
+    if (cinemaPaused) return;
+    cinemaPaused = true;
+    cinemaBgm.pause();
+  },
+  resume() {
+    if (!cinemaPaused) return;
+    cinemaPaused = false;
+    clock.getDelta(); // 冻结期间的累计时长作废，防止恢复瞬间跳变
+    cinemaBgm.resume();
+  },
+  setMuted(m: boolean) {
+    cinemaMutedExternal = m;
+    cinemaBgm.setMutedExternal(m);
+  },
+  applySettings(next: unknown) {
+    applyCinemaSettings(sanitizeCinemaSettings(next));
+  },
+  // —— 自动化测试钩子 ——
+  bgmSeekToEnd: () => cinemaBgm.seekToEnd(),
+  bgmNext: () => cinemaBgm.next(),
+  get status() {
+    return {
+      paused: cinemaPaused,
+      mutedExternal: cinemaMutedExternal,
+      settings: cineSettings,
+      bgm: cinemaBgm.status,
+    };
+  },
+};
+(window as unknown as Record<string, unknown>).__ehCinema = ehCinema;
+const cineQuery = new URLSearchParams(location.search);
+if (cineQuery.has('paused')) ehCinema.pause();
+if (cineQuery.has('muted')) ehCinema.setMuted(true);
 
 // —— 主循环 ——
 const clock = new THREE.Clock();
@@ -1445,6 +1521,18 @@ function tick() {
   const dt = Math.min(rawDt, 0.05);
   lastTickAt = Date.now();
 
+  // 影院模式失焦暂停：冻结画面与模拟（保留最后一帧，不提交任何 GPU 工作）
+  if (cinemaMode && cinemaPaused) return;
+
+  // 帧率上限：累积帧时长，不足一帧预算直接跳过渲染（运动节奏仍按真实挂钟）
+  let cineDt = Math.min(rawDt, 0.25);
+  if (cinemaMode && cineSettings.maxFps > 0) {
+    cineFpsBudget += rawDt;
+    if (cineFpsBudget < 1 / cineSettings.maxFps - 0.0005) return;
+    cineDt = Math.min(cineFpsBudget, 0.25);
+    cineFpsBudget = 0;
+  }
+
   if (state.mode === 'photo') {
     controls.update();
     bhUniforms.uTime.value += dt;
@@ -1453,7 +1541,7 @@ function tick() {
   }
 
   // 影院模式用未封顶的真实帧时长（上限 0.25s 防跳变），低帧率下运动节奏仍保持 10x
-  if (cinemaMode) stepCinema(Math.min(rawDt, 0.25));
+  if (cinemaMode) stepCinema(cineDt);
   else stepSimulation(dt);
 
   shipVisual.group.position.copy(ship.pos);
@@ -1559,6 +1647,7 @@ function renderPipeline() {
 // 页面被浏览器节流（后台标签/最小化）时，用定时器兜底驱动模拟
 let simAcc = 0;
 setInterval(() => {
+  if (cinemaMode && cinemaPaused) return; // 失焦暂停时不推进
   if (Date.now() - lastTickAt > 300) {
     simAcc += 1 / 60;
     let steps = 0;
