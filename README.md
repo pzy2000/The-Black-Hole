@@ -15,7 +15,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/lensing-disk.jpg" width="820" alt="引力透镜下的吸积盘">
+  <img src="docs/screenshots/black-hole.gif" width="820" alt="实时渲染的旋转黑洞"><br>
+  <sub><b>实时渲染录屏</b> · 每一帧都由测地线光线步进现场计算——不是预渲染动画</sub>
 </p>
 
 ## 为什么值得一玩
