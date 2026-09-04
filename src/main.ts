@@ -14,6 +14,7 @@ import { MISSIONS, type MissionCtx, type MissionFx, type MissionWaypoint } from 
 import { SYSTEMS, systemByMission, companionPos, type StarSystem } from './systems';
 import { buildSky, dirToEquirect, starLabel, type NamedStar } from './sky';
 import {
+  circularSpeed,
   gravityAccel,
   initialShip,
   maxWarpFor,
@@ -67,15 +68,21 @@ const QUALITY = {
   low: { resScale: 0.45, steps: 180 },
   medium: { resScale: 0.62, steps: 300 },
   high: { resScale: 0.8, steps: 460 },
+  ultra: { resScale: 0.9, steps: 520 },
 } as const;
 type QualityKey = keyof typeof QUALITY;
-const QUALITY_ORDER: QualityKey[] = ['low', 'medium', 'high'];
-const QUALITY_LABEL: Record<QualityKey, string> = { low: '低', medium: '中', high: '高' };
+const QUALITY_ORDER: QualityKey[] = ['low', 'medium', 'high', 'ultra'];
+const QUALITY_LABEL: Record<QualityKey, string> = { low: '低', medium: '中', high: '高', ultra: '超高' };
 
 const params = {
   quality: 'medium' as QualityKey,
   beaming: 1.0,
 };
+
+// —— 影院模式（?cinema=1）：桌面壁纸 / 屏幕保护专用 ——
+// 锁定「朝向黑洞」机位 + 时间×10 + 飞船匀速圆周轨道（解析驱动，永不坠落） + 无 UI
+const cinemaMode = new URLSearchParams(location.search).has('cinema');
+let skyOk = false;
 
 // —— 游戏状态 ——
 const ship: ShipState = initialShip();
@@ -975,6 +982,7 @@ async function initSky() {
       labelDirs.push(st.dir.clone());
     }
     console.log(`[天空] 真实星表加载完成: ${sky.starCount} 颗恒星`);
+    skyOk = true;
   } catch (e) {
     console.error('星空烘焙失败，保留纯黑天空', e);
   }
@@ -1058,11 +1066,13 @@ function refreshDexCards() {
     .join(''),
   );
 }
-showMenuMode();
+if (cinemaMode) launchCinema();
+else showMenuMode();
 
 // —— 键盘动作 ——
 const CAM_NAMES = ['追尾', '座舱', '自由', '朝向黑洞'];
 window.addEventListener('keydown', (e) => {
+  if (cinemaMode) return; // 影院模式不响应任何输入
   if (e.code === 'KeyP') {
     if (state.mode === 'flight') enterPhotoMode();
     else if (state.mode === 'photo') exitPhotoMode();
@@ -1165,6 +1175,9 @@ function updateCamera(dt: number) {
   hud,
   input,
   flags,
+  get camera() {
+    return camera;
+  },
   get r() {
     return ship.pos.length();
   },
@@ -1189,6 +1202,23 @@ function updateCamera(dt: number) {
   get derelictPos() {
     return derelict ? derelict.pos.toArray() : null;
   },
+  get cinemaStatus() {
+    if (!cinemaMode) return null;
+    return {
+      frames: frame,
+      angle: cineAngle,
+      r: ship.pos.length(),
+      speed: ship.vel.length(),
+      periodRealSec: (2 * Math.PI) / (cineOmega * state.warp),
+      warp: state.warp,
+      cam: state.cameraMode,
+      quality: params.quality,
+      fps: cineFpsNow,
+      skyOk,
+      hudVisible: state.hudVisible,
+      menuVisible: ui.anyVisible,
+    };
+  },
   get predictorLine() {
     return predictor.line;
   },
@@ -1201,6 +1231,94 @@ function updateCamera(dt: number) {
     lookAlongDir(x, y, z);
   },
 };
+
+// —— 影院模式：解析驱动的匀速圆周轨道（非数值积分，永不衰减/坠落） ——
+// 轨道半径 18.04 Rs（初始位形 (18, 1.2, 0) 的模长），轨道面过原点、轻微倾斜
+const cineR = Math.hypot(18, 1.2);
+const cineE1 = new THREE.Vector3(18, 1.2, 0).normalize();
+const cineE2 = new THREE.Vector3(0, 0, 1);
+const cineOrigin = new THREE.Vector3();
+const cineMat4 = new THREE.Matrix4();
+// PW 势圆轨道：v²/r = GM/(r-Rs)² → ω = v_circ / r
+const cineOmega = circularSpeed(cineR) / cineR;
+let cineAngle = 0;
+let cineFpsMark = 0;
+let cineFpsFrames = 0;
+let cineFpsMeasured = false;
+let cineFpsNow = 0;
+let cineDrops = 0;
+
+function stepCinema(dt: number) {
+  frame++;
+  cineAngle += cineOmega * dt * state.warp;
+  const cos = Math.cos(cineAngle);
+  const sin = Math.sin(cineAngle);
+  ship.pos.copy(cineE1).multiplyScalar(cos * cineR).addScaledVector(cineE2, sin * cineR);
+  ship.vel
+    .copy(cineE1)
+    .multiplyScalar(-sin * cineOmega * cineR)
+    .addScaledVector(cineE2, cos * cineOmega * cineR);
+  ship.quat.setFromRotationMatrix(cineMat4.lookAt(ship.vel, cineOrigin, AXIS_Y));
+  ship.throttle = 0;
+  shipVisual.setThrottle(0);
+  const dtSim = dt * state.warp;
+  state.simTime += dtSim;
+  state.shipTime += dtSim * dilation(cineR, cineOmega * cineR);
+}
+
+// 起播 8s 预热后监测帧率，连续不足则逐级降画质（ultra→high→medium），保证壁纸流畅
+// 用挂钟计帧（rAF 节流/冻结时 dt 累计会失真）
+function cinemaFpsGuard() {
+  const now = performance.now();
+  if (cineFpsMark === 0) {
+    cineFpsMark = now;
+    return;
+  }
+  cineFpsFrames++;
+  const elapsed = (now - cineFpsMark) / 1000;
+  if (elapsed < 4) return;
+  const fps = cineFpsFrames / elapsed;
+  cineFpsFrames = 0;
+  cineFpsMark = now;
+  if (elapsed > 6) return; // 视图被冻结/休眠过，本次窗口不可信
+  if (!cineFpsMeasured) {
+    cineFpsMeasured = true; // 首个窗口含烘焙预热，只记录不降级
+    return;
+  }
+  cineFpsNow = fps;
+  if (fps < 26 && cineDrops < 2) {
+    cineDrops++;
+    const ladder: QualityKey[] = ['ultra', 'high', 'medium'];
+    params.quality = ladder[cineDrops];
+    resize();
+  }
+}
+
+function launchCinema() {
+  missionIndex = -1;
+  objectiveIdx = 0;
+  flags.clear();
+  activeWaypoints = [];
+  state.mode = 'flight';
+  state.paused = false;
+  state.warp = 10;
+  state.cameraMode = 3; // 朝向黑洞：跟随飞船，视线锁定黑洞
+  state.hudVisible = false;
+  state.autoBrake = false;
+  controls.enabled = false;
+  Object.assign(ship, initialShip());
+  ship.fuel = 9999;
+  markers.set([]);
+  markers.setVisible(false);
+  predictor.line.visible = false;
+  shipVisual.group.visible = true;
+  hud.setVisible(false);
+  document.getElementById('ui')?.remove();
+  errBox.remove();
+  document.title = '事件视界 · 影院';
+  params.quality = 'ultra';
+  resize();
+}
 
 // —— 主循环 ——
 const clock = new THREE.Clock();
@@ -1323,7 +1441,8 @@ function stepSimulation(dt: number) {
 let lastTickAt = Date.now();
 function tick() {
   requestAnimationFrame(tick);
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const rawDt = clock.getDelta();
+  const dt = Math.min(rawDt, 0.05);
   lastTickAt = Date.now();
 
   if (state.mode === 'photo') {
@@ -1333,14 +1452,16 @@ function tick() {
     return;
   }
 
-  stepSimulation(dt);
+  // 影院模式用未封顶的真实帧时长（上限 0.25s 防跳变），低帧率下运动节奏仍保持 10x
+  if (cinemaMode) stepCinema(Math.min(rawDt, 0.25));
+  else stepSimulation(dt);
 
   shipVisual.group.position.copy(ship.pos);
   shipVisual.group.quaternion.copy(ship.quat);
 
   updateCamera(dt);
 
-  if (frame % 3 === 0) predictor.update(ship.pos, ship.vel);
+  if (!cinemaMode && frame % 3 === 0) predictor.update(ship.pos, ship.vel);
 
   if (starMapOn) {
     const p = new THREE.Vector3();
@@ -1359,6 +1480,8 @@ function tick() {
   }
 
   if (state.hudVisible) hud.update(state, ship, camera);
+
+  if (cinemaMode) cinemaFpsGuard();
 
   bhUniforms.uTime.value += dt;
   bhUniforms.uBeaming.value = params.beaming;
@@ -1440,7 +1563,8 @@ setInterval(() => {
     simAcc += 1 / 60;
     let steps = 0;
     while (simAcc >= 1 / 60 && steps < 30) {
-      stepSimulation(1 / 60);
+      if (cinemaMode) stepCinema(1 / 60);
+      else stepSimulation(1 / 60);
       simAcc -= 1 / 60;
       steps++;
     }

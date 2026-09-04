@@ -18,10 +18,11 @@ const MIME = {
 };
 
 createServer(async (req, res) => {
-  const path = req.url === '/' ? '/index.html' : req.url.split('?')[0];
+  const path = (req.url ?? '/').split(/[?#]/)[0] || '/';
+  const file = path === '/' ? '/index.html' : path;
   try {
-    const data = await readFile(join(root, path));
-    res.writeHead(200, { 'Content-Type': MIME[extname(path)] ?? 'application/octet-stream' });
+    const data = await readFile(join(root, file));
+    res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' });
     res.end(data);
   } catch {
     res.writeHead(404);
