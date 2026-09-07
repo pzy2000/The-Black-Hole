@@ -22,7 +22,7 @@ app.setActivationPolicy(.regular)
 
 let win = NSWindow(
   contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
-  styleMask: [.titled, .closable],
+  styleMask: [.titled, .miniaturizable], // 不可关闭：防止用户误关导致测试失真
   backing: .buffered,
   defer: false
 )
@@ -48,6 +48,10 @@ guard let view = cls.init(frame: frame, isPreview: false) else {
 view.autoresizingMask = [.width, .height]
 win.contentView?.addSubview(view)
 view.startAnimation()
+// 悬浮层级：避免被用户前台窗口遮挡后 WebKit 把 rAF 节流到 1fps，导致帧率测量失真
+win.level = .floating
+win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+win.isReleasedWhenClosed = false
 win.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 print("HARNESS: 已启动 \(bundle.bundleIdentifier ?? "?")")

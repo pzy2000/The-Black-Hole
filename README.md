@@ -110,7 +110,9 @@ python3 macos/e2e.py # 设置功能端到端测试（37 项，需 GUI 会话）
 ```
 
 - **实况壁纸**：启动 `事件视界壁纸.app`，画面钉在桌面图标之下、鼠标穿透；菜单栏「黑洞」
-  图标可打开设置、重载画面、开关机自启（需 app 位于 /Applications）。
+  图标可打开设置、快捷开关 **暂停渲染（⌘P）/ 停止并释放内存（⌘S）/ 静音（⌘M）**
+  （勾选即手动生效，再点一次恢复自动；与失焦策略按更激进者优先合成）、
+  重载画面、开关机自启（需 app 位于 /Applications）。
 - **屏幕保护程序**：系统设置 → 屏幕保护程序 → 其他 → 选择「事件视界」；「选项…」即设置面板。
 
 **设置（Wallpaper Engine 风格，壁纸与屏保共用，存于
@@ -140,7 +142,7 @@ python3 macos/e2e.py # 设置功能端到端测试（37 项，需 GUI 会话）
 | M | 星图模式（星座连线 + 亮星名） |
 | E | EHT 视角（M87* 站，地球观测几何） |
 
-右上角开关：画质三档 · 多普勒聚束「真实 ↔ 电影」。
+右上角开关：画质四档 · 多普勒聚束「真实 ↔ 电影」。
 
 ## 🌌 游戏内容
 
@@ -171,25 +173,37 @@ python3 macos/e2e.py # 设置功能端到端测试（37 项，需 GUI 会话）
 - **相对论喷流**：β=0.9 锥形外流、多普勒增亮、湍流结节
 - **潮汐撕裂事件（TDE）**：倾斜平面的蓝白碎屑流
 - **飞船轨道**：Paczyński–Wiita 伪牛顿势（保留真实 ISCO 行为），时间膨胀按史瓦西公式精确计算
-- **程序星空**：黑体色温恒星 + 银河带，全部被透镜实时扭曲
+- **HYG 星表星空**：黑体色温恒星 + 银河带，全部被透镜实时扭曲
 
 ## 📁 项目结构
 
 ```
 src/
 ├── main.ts          # 主循环、相机、键控、EHT/星图/摄影模式
+├── cinema.ts        # 影院模式：宿主设置加载 + BGM 播放器
 ├── shaders.ts       # 黑洞片元着色器：测地线积分、盘、喷流、天空采样
 ├── sky.ts           # HYG 星表 → 天球纹理烘焙
 ├── constellations.ts# 星座连线定义
 ├── systems.ts       # 三个黑洞系统的物理参数（质量/盘/伴星/喷流）
 ├── missions.ts      # 14 关任务：目标、简报、事件脚本
+├── markers.ts       # 任务航点的 3D 光环 + 屏幕投影标签
 ├── ship.ts          # 飞船模型与视觉
 ├── hud.ts / ui.ts   # 飞行 HUD / 菜单、星图、图鉴
 ├── input.ts         # 键鼠输入
 ├── state.ts         # 游戏状态与物理常量（GM、时间膨胀、引力）
 └── style.css
 scripts/
-└── build-sky.mjs    # 星表预处理（assets/hyg.csv → public/sky）
+├── build-sky.mjs    # 星表预处理（assets/hyg.csv → public/sky）
+├── serve.mjs        # 零依赖静态服务器（启动事件视界.command 用）
+└── theory-dive.ts   # 飞行物理 / 热管理 1:1 数值验证
+macos/
+├── build.sh         # 构建网页 dist + 壁纸 App + 屏保 .saver（swiftc 编译）
+├── install.sh       # 壁纸 App → /Applications；屏保 → ~/Library/Screen Savers
+├── e2e.py           # 壁纸/屏保设置端到端测试
+├── common/          # 壁纸与屏保共享：设置窗口、eh:// 协议、设置存取
+├── wallpaper/       # 实况壁纸 App
+├── saver/           # 屏幕保护程序
+└── harness/         # 屏保测试宿主（e2e.py 使用）
 ```
 
 ## 🤝 参与贡献

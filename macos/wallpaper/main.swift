@@ -24,14 +24,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private var cineSettings = EHCineSettings.load()
 
+  // —— 手动播放控制（菜单栏快捷开关；与失焦自动策略按更激进者优先合成） ——
+  private var manualPlayback: String? // nil=跟随失焦策略；"pause" / "stop"
+  private var manualMuted = false
+  private var miPause: NSMenuItem?
+  private var miStop: NSMenuItem?
+  private var miMute: NSMenuItem?
+
   // —— 失焦监测（逐屏） ——
   private var focusTimer: Timer?
   private var occludedPerScreen: [Bool] = []
   private var appliedActionPerScreen: [String?] = [] // nil=尚未应用；"visible"/pause/stop/mute
   private var sleeping = false // 休眠/屏幕睡眠期间冻结策略，由唤醒路径统一恢复
   private var simulatedOcclusion: [Bool]? // EH_TEST_FOCUS 自动化注入
+  private var policyEvalCount = 0 // 诊断：策略评估次数
 
   func applicationDidFinishLaunching(_ note: Notification) {
+    NSLog("[EH] didFinishLaunching")
     NSApp.activate(ignoringOtherApps: false)
     buildWindows()
     buildMenu()
@@ -50,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       if appliedActionPerScreen[index] == "pause" { s += "&paused=1" }
       if appliedActionPerScreen[index] == "mute" { s += "&muted=1" }
     }
+    if manualMuted { s += "&muted=1" }
     return URL(string: s)!
   }
 
@@ -165,29 +175,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return result
   }
 
+  private static func actionRank(_ a: String) -> Int {
+    switch a {
+    case "stop": return 3
+    case "pause": return 2
+    case "mute": return 1
+    default: return 0 // visible / continue
+    }
+  }
+
+  /// 每屏最终生效动作 = max(手动开关, 失焦自动策略)：手动覆盖平时状态，
+  /// 但失焦时更激进的自动动作（如"停止释放内存"）仍然生效。
+  private func effectiveAction(for index: Int) -> String {
+    let auto = occludedPerScreen.indices.contains(index) && occludedPerScreen[index]
+      ? cineSettings.focusAction : "visible"
+    let manual = manualPlayback ?? "visible"
+    return Self.actionRank(manual) >= Self.actionRank(auto) ? manual : auto
+  }
+
   private func applyFocusPolicy(force: Bool = false) {
+    policyEvalCount += 1
+    NSLog("[EH] 策略评估 #\(policyEvalCount) force=\(force) screens=\(webviews.count)")
     guard !sleeping else { return }
     if occludedPerScreen.count != webviews.count { occludedPerScreen = computeOcclusion() }
     while appliedActionPerScreen.count < webviews.count { appliedActionPerScreen.append(nil) }
     for i in 0..<webviews.count {
-      let action = occludedPerScreen.indices.contains(i) && occludedPerScreen[i] ? cineSettings.focusAction : "visible"
-      if !force, appliedActionPerScreen[i] == action { continue }
+      let action = effectiveAction(for: i)
+      let changed = appliedActionPerScreen[i] != action
+      if !force, !changed { continue }
       appliedActionPerScreen[i] = action
+      if changed {
+        NSLog("[EH] screen\(i) 播放策略 → \(action)")
+      }
       switch action {
       case "pause":
         ensureWebview(at: i)
         postCommand("pause()", to: i)
       case "stop":
-        releaseWebview(at: i, reason: "失焦")
+        releaseWebview(at: i, reason: "停止")
       case "mute":
         ensureWebview(at: i)
         postCommand("setMuted(true)", to: i)
       default: // visible
         ensureWebview(at: i)
         postCommand("resume()", to: i)
-        postCommand("setMuted(false)", to: i)
+        // 手动静音要跨失焦周期保持（含 webview 重建后由 URL 参数兜底）
+        postCommand(manualMuted ? "setMuted(true)" : "setMuted(false)", to: i)
       }
-      NSLog("[EH] screen\(i) 失焦策略 → \(action)")
     }
   }
 
@@ -230,6 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       object: nil, queue: .main
     ) { [weak self] _ in
       guard let self else { return }
+      NSLog("[EH] 屏幕参数变化（windows=\(self.windows.count) screens=\(NSScreen.screens.count)）")
       // 屏幕（数量/位置/分辨率）没变就不折腾，避免休眠唤醒时的重复重建
       if self.windows.count == NSScreen.screens.count,
          zip(self.windows, NSScreen.screens).allSatisfy({ $0.0.frame == $0.1.frame }) {
@@ -244,11 +279,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func enterSleep() {
+    NSLog("[EH] 显示器即将睡眠，摘除 WebView")
     sleeping = true
     detachWebviews()
   }
 
   private func wakeUp() {
+    NSLog("[EH] 显示器已唤醒，装回并重载")
     sleeping = false
     reattachWebviews()
     applyFocusPolicy(force: true)
@@ -263,14 +300,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  /// 唤醒后装回并重载画面
+  /// 唤醒后装回并重载画面。
+  /// 必须用带当前状态参数（paused/muted）的新 URL，不能用 web.url 旧值——
+  /// 否则重载后的页面丢失暂停/静音态，且活体命令与加载存在竞态。
   private func reattachWebviews() {
     for (i, win) in windows.enumerated() where i < webviews.count {
       guard let web = webviews[i] else { continue }
       if web.superview == nil {
         win.contentView = web
       }
-      web.load(URLRequest(url: web.url ?? startURL(index: i)))
+      // 唤醒/屏幕参数通知可能连发多次：目标 URL 一致就不重载，避免页面反复重置
+      let desired = URLRequest(url: startURL(index: i))
+      if web.url != desired.url {
+        web.load(desired)
+      }
     }
   }
 
@@ -282,6 +325,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
     settings.target = self
     menu.addItem(settings)
+    menu.addItem(.separator())
+
+    let pause = NSMenuItem(title: "暂停渲染", action: #selector(toggleManualPause(_:)), keyEquivalent: "p")
+    pause.target = self
+    menu.addItem(pause)
+    miPause = pause
+
+    let stop = NSMenuItem(title: "停止并释放内存", action: #selector(toggleManualStop(_:)), keyEquivalent: "s")
+    stop.target = self
+    menu.addItem(stop)
+    miStop = stop
+
+    let mute = NSMenuItem(title: "静音", action: #selector(toggleManualMute(_:)), keyEquivalent: "m")
+    mute.target = self
+    menu.addItem(mute)
+    miMute = mute
+    syncPlaybackMenu()
     menu.addItem(.separator())
 
     let reload = NSMenuItem(title: "重新加载画面", action: #selector(reloadAll), keyEquivalent: "r")
@@ -327,6 +387,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private static var settingsModelKey: UInt8 = 0
+
+  // MARK: - 手动播放控制（菜单栏快捷开关）
+
+  private func syncPlaybackMenu() {
+    miPause?.state = manualPlayback == "pause" ? .on : .off
+    miStop?.state = manualPlayback == "stop" ? .on : .off
+    miMute?.state = manualMuted ? .on : .off
+  }
+
+  @objc private func toggleManualPause(_ sender: NSMenuItem) {
+    NSLog("[EH] 手动切换暂停（当前 state=\(sender.state == .on ? "on" : "off")）")
+    manualPlayback = sender.state == .on ? nil : "pause" // 暂停与停止互斥，单值覆盖
+    syncPlaybackMenu()
+    applyFocusPolicy(force: true)
+  }
+
+  @objc private func toggleManualStop(_ sender: NSMenuItem) {
+    NSLog("[EH] 手动切换停止（当前 state=\(sender.state == .on ? "on" : "off")）")
+    manualPlayback = sender.state == .on ? nil : "stop"
+    syncPlaybackMenu()
+    applyFocusPolicy(force: true)
+  }
+
+  @objc private func toggleManualMute(_ sender: NSMenuItem) {
+    NSLog("[EH] 手动切换静音（当前 state=\(sender.state == .on ? "on" : "off")）")
+    manualMuted = sender.state != .on
+    syncPlaybackMenu()
+    for web in webviews.compactMap({ $0 }) {
+      web.evaluateJavaScript("window.__ehCinema && window.__ehCinema.setMuted(\(manualMuted))", completionHandler: nil)
+    }
+  }
 
   private func syncLoginState() {
     let enabled = SMAppService.mainApp.status == .enabled
